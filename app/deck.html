@@ -1,0 +1,911 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>Agentdeck</title>
+<style>
+  /* Catppuccin Mocha, to sit on top of the terminal it controls */
+  :root {
+    --crust: #11111b; --o0: #6c7086; --o1: #8a90a8; --sub: #a6adc8; --text: #cdd6f4; --mauve: #cba6f7;
+    --red: #f38ba8; --yellow: #f9e2af; --green: #a6e3a1; --blue: #89b4fa; --peach: #fab387;
+    --line: rgba(205, 214, 244, .08);
+    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    --ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; background: transparent; overflow: hidden; }
+  body { color: var(--text); font: 13px/1.45 var(--ui); -webkit-font-smoothing: antialiased; user-select: none; cursor: default; }
+  button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+  button:focus-visible { outline: 2px solid var(--mauve); outline-offset: 1px; }
+
+  .deck { height: 100%; display: flex; flex-direction: column; background: rgba(24, 24, 37, .82);
+    border: 1px solid rgba(205, 214, 244, .11); border-radius: 14px; overflow: hidden; }
+  @media (prefers-reduced-transparency: reduce) { .deck { background: #181825; } }
+
+  /* ── top bar ── */
+  header { display: flex; align-items: center; gap: 10px; padding: 0 12px 0 16px; height: 48px; flex: none; border-bottom: 1px solid var(--line); }
+  header svg { flex: none; color: var(--o0); }
+  #q { flex: 1; min-width: 0; background: none; border: 0; outline: 0; color: var(--text); font: 15px var(--ui); caret-color: var(--mauve); }
+  #q::placeholder { color: var(--o0); }
+  #sum { display: flex; gap: 6px; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px; border-radius: 11px;
+    font: 500 11.5px var(--ui); background: rgba(205, 214, 244, .06); color: var(--sub); white-space: nowrap; }
+  .chip b { font-weight: 650; color: var(--text); }
+  .chip.need { background: rgba(249, 226, 175, .13); color: var(--yellow); } .chip.need b { color: var(--yellow); }
+  .chip.block { background: rgba(243, 139, 168, .17); color: var(--red); } .chip.block b { color: var(--red); }
+  .chip.stale { background: rgba(243, 139, 168, .17); color: var(--red); }
+  .btn { height: 24px; padding: 0 9px; border-radius: 7px; font: 500 11.5px var(--ui); color: var(--sub);
+    background: rgba(205, 214, 244, .06); border: 1px solid rgba(205, 214, 244, .09); white-space: nowrap; }
+  .btn:hover { background: rgba(205, 214, 244, .11); color: var(--text); }
+  .btn[aria-pressed="true"] { background: rgba(203, 166, 247, .2); border-color: rgba(203, 166, 247, .45); color: var(--text); }
+  .btn kbd, footer kbd { font: 500 10.5px var(--mono); color: var(--o1); margin-left: 4px; }
+
+  /* ── list ── */
+  main { flex: 1; min-height: 0; display: flex; }
+  #list { width: 368px; flex: none; overflow-y: auto; padding: 4px 8px 10px; border-right: 1px solid var(--line); }
+  .section { display: flex; align-items: baseline; gap: 7px; padding: 12px 10px 5px; color: var(--sub); font: 600 11px var(--ui); letter-spacing: .02em; }
+  .section .n { font: 500 11px var(--mono); color: var(--o1); }
+  .section .n.need { color: var(--yellow); } .section .n.block { color: var(--red); }
+  .proj-head { padding: 7px 10px 2px 36px; font: 500 11px var(--mono); color: var(--o1); }
+  .none { padding: 34px 12px; text-align: center; color: var(--o1); }
+
+  .row { display: flex; align-items: center; gap: 10px; padding: 7px 9px 7px 12px; border-radius: 9px; }
+  .row:hover { background: rgba(205, 214, 244, .045); }
+  .row.sel { background: rgba(203, 166, 247, .14); box-shadow: inset 0 0 0 1px rgba(203, 166, 247, .36); }
+  .row .body { flex: 1; min-width: 0; }
+  .row .title { font-weight: 560; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .line { margin-top: 1px; font-size: 12px; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .tag { font: 500 11px var(--mono); margin-right: 7px; }
+  .tag.claude { color: var(--peach); } .tag.codex { color: var(--blue); } .tag.proj { color: var(--o1); }
+  .row.working .title, .row.done .title { font-weight: 450; color: #bac2de; }
+  .row.seen { opacity: .62; }
+  .row .meta { flex: none; display: flex; align-items: center; gap: 7px; font: 500 11px var(--mono); color: var(--o1); }
+  .row.yours .age { color: var(--yellow); } .row.blocked .age { color: var(--red); }
+  .key { display: inline-flex; align-items: center; justify-content: center; min-width: 19px; height: 19px; padding: 0 5px;
+    border-radius: 5px; background: rgba(205, 214, 244, .07); border: 1px solid rgba(205, 214, 244, .1); font: 500 10.5px var(--mono); color: var(--sub); }
+  .row.exec { padding-top: 4px; padding-bottom: 4px; }
+  .row.exec .title { font-size: 12px; font-weight: 400; color: var(--sub); }
+  .row.exec .title b { font: 500 11.5px var(--mono); color: var(--text); margin-right: 3px; }
+  .row.exec .title .tag { margin: 0 2px 0 5px; }
+  .row.nested { padding-left: 24px; }
+  .row.fresh { animation: arrive 8s ease-out both; }
+  @keyframes arrive { 0%, 30% { background: rgba(249, 226, 175, .2); } 100% { background: transparent; } }
+
+  /* state glyphs: the shape carries the meaning, the colour repeats it, nothing moves */
+  .glyph { flex: none; width: 14px; height: 14px; display: grid; place-items: center; }
+  .working .glyph i { width: 9px; height: 9px; border-radius: 50%; border: 1.6px solid var(--green); opacity: .75; }
+  .yours .glyph i { width: 8px; height: 8px; background: var(--yellow); transform: rotate(45deg); border-radius: 1.5px; }
+  .blocked .glyph i { width: 10px; height: 10px; border-radius: 50%; background: var(--red); box-shadow: 0 0 0 3px rgba(243, 139, 168, .22); }
+  .done .glyph i { width: 9px; height: 5px; border: solid var(--blue); border-width: 0 0 1.8px 1.8px; transform: rotate(-45deg) translate(1px, -1px); }
+  .exec .glyph i { scale: .8; }
+
+  /* ── recap ── */
+  #view { flex: 1; min-width: 0; display: flex; flex-direction: column; --c: var(--green); }
+  #view[data-state="yours"] { --c: var(--yellow); } #view[data-state="blocked"] { --c: var(--red); } #view[data-state="done"] { --c: var(--blue); }
+  #view.none > * { display: none; }
+  #head { padding: 14px 18px 10px 20px; flex: none; }
+  #head .top { display: flex; align-items: center; gap: 8px; }
+  #head .state { display: inline-flex; align-items: center; gap: 7px; font: 600 11px var(--ui); letter-spacing: .04em; color: var(--c); margin-right: auto; }
+  #head h1 { margin: 7px 0 3px; font: 600 18px/1.25 var(--ui); letter-spacing: -.01em; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  #head .where { font: 11.5px var(--mono); color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #note { margin: 0 20px 8px; padding: 8px 11px; border-radius: 8px; font-size: 12.5px; background: rgba(249, 226, 175, .1); color: var(--yellow); flex: none; }
+  #note.blocked { background: rgba(243, 139, 168, .13); color: var(--red); }
+  #scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 20px 12px; user-select: text; cursor: auto; }
+  .label { margin: 12px 0 5px; font: 600 11px var(--ui); letter-spacing: .02em; color: var(--o1); }
+  #asked { padding: 9px 12px; border-radius: 9px; background: rgba(205, 214, 244, .05); color: var(--sub); font-size: 12.5px;
+    white-space: pre-wrap; overflow-wrap: anywhere; max-height: 84px; overflow: hidden; -webkit-mask-image: linear-gradient(#000 54px, transparent 84px); cursor: pointer; }
+  #asked.short, #asked.open { max-height: none; -webkit-mask-image: none; } #asked.short { cursor: auto; }
+  #doing { font: 12px var(--mono); color: var(--green); overflow-wrap: anywhere; }
+  #screen { margin: 0; padding: 10px 12px; border-radius: 9px; background: rgba(17, 17, 27, .72); border: 1px solid var(--line);
+    font: 11px/1.5 var(--mono); color: #bac2de; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 236px; overflow-y: auto; }
+  #said { font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
+  #said p { margin: 0 0 7px; } #said h4 { margin: 12px 0 5px; font: 600 13px var(--ui); color: var(--mauve); }
+  #said ul { margin: 0 0 8px; padding-left: 18px; } #said li { margin: 2px 0; } #said li::marker { color: var(--o0); }
+  #said strong { font-weight: 600; color: #e6ebff; }
+  #said code { font: 11.5px var(--mono); padding: 1px 5px; border-radius: 4px; background: rgba(205, 214, 244, .08); color: var(--peach); }
+  #said pre { margin: 0 0 8px; padding: 9px 11px; border-radius: 8px; background: rgba(17, 17, 27, .6); font: 11.5px/1.5 var(--mono); white-space: pre-wrap; color: var(--sub); }
+  #said .link { color: var(--blue); text-decoration: underline; text-decoration-color: rgba(137, 180, 250, .4); text-underline-offset: 2px; }
+  #said .cut { color: var(--o1); font-size: 12px; }
+  :is(#said, .turn .it) table { border-collapse: collapse; margin: 2px 0 10px; font-size: 12.5px; }
+  :is(#said, .turn .it) :is(th, td) { text-align: left; padding: 4px 14px 4px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  :is(#said, .turn .it) th { color: var(--sub); font-weight: 600; }
+  #commitList { margin: 0; padding: 9px 12px; border-radius: 9px; background: rgba(205, 214, 244, .05); font: 11.5px/1.55 var(--mono); color: var(--sub); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 130px; overflow-y: auto; }
+  .board:not([data-tab="changes"]) :is(#commitLabel, #commitList) { display: none; }
+  #changedList { margin: 0; padding: 9px 12px; border-radius: 9px; background: rgba(205, 214, 244, .05); font: 11.5px/1.55 var(--mono); color: var(--sub); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+  #composer { flex: none; margin: 0 14px 12px; }
+  #to { font: 500 11.5px var(--ui); color: var(--sub); padding: 0 4px 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #to b { color: var(--text); font-weight: 600; }
+  #to.bad { color: var(--red); white-space: normal; }
+  #reply { display: flex; align-items: flex-end; gap: 8px; padding: 7px 7px 7px 12px; border-radius: 11px; background: rgba(17, 17, 27, .6); border: 1px solid rgba(205, 214, 244, .1); }
+  #reply:focus-within { border-color: rgba(203, 166, 247, .6); }
+  #r { flex: 1; min-width: 0; resize: none; background: none; border: 0; outline: 0; color: var(--text); font: 13px/1.45 var(--ui); max-height: 104px; padding: 3px 0; caret-color: var(--mauve); }
+  #r::placeholder { color: var(--o0); }
+  #sendBtn { flex: none; height: 26px; padding: 0 10px; border-radius: 7px; font: 600 11.5px var(--ui); background: var(--mauve); color: var(--crust); }
+  #sendBtn kbd { font: 500 10.5px var(--mono); margin-left: 5px; color: rgba(17, 17, 27, .65); }
+  #sendBtn:disabled { background: rgba(205, 214, 244, .08); color: var(--o1); cursor: default; } #sendBtn:disabled kbd { color: var(--o0); }
+  #sendBtn.plain { background: rgba(205, 214, 244, .1); color: var(--text); } #sendBtn.plain kbd { display: none; }
+  #composer.off #reply { display: none; } #composer.off #to { padding-bottom: 2px; }
+
+  /* ── new agent ── */
+  #new { flex: 1; min-width: 0; padding: 14px 20px 14px; display: flex; flex-direction: column; gap: 9px; overflow-y: auto; }
+  #new[hidden] { display: none; }
+  #new h1 { margin: 2px 0 2px; font: 600 18px/1.25 var(--ui); letter-spacing: -.01em; }
+  #new .state { font: 600 11px var(--ui); letter-spacing: .04em; color: var(--mauve); }
+  #new label { display: block; font: 600 11px var(--ui); color: var(--o1); letter-spacing: .02em; }
+  #new input, #new textarea { display: block; width: 100%; margin-top: 4px; padding: 7px 10px; border-radius: 8px; background: rgba(17, 17, 27, .6);
+    border: 1px solid rgba(205, 214, 244, .1); color: var(--text); font: 13px var(--ui); outline: 0; resize: none; caret-color: var(--mauve); user-select: text; }
+  #new input:focus, #new textarea:focus { border-color: rgba(203, 166, 247, .6); }
+  #nCmd { font: 12px var(--mono) !important; color: var(--sub) !important; }
+  #nList { display: flex; flex-wrap: wrap; gap: 5px; min-height: 24px; }
+  #nList button { height: 23px; padding: 0 9px; border-radius: 7px; font: 500 11.5px var(--mono); color: var(--sub); background: rgba(205, 214, 244, .06); border: 1px solid transparent; }
+  #nList button.on { border-color: rgba(203, 166, 247, .5); color: var(--text); background: rgba(203, 166, 247, .16); }
+  .seg { display: inline-flex; gap: 4px; }
+  #new .row2 { display: flex; align-items: center; gap: 10px; }
+  #nWhy { flex: 1; font-size: 12px; color: var(--red); }
+  #nGo { height: 26px; padding: 0 12px; border-radius: 7px; font: 600 11.5px var(--ui); background: var(--mauve); color: var(--crust); }
+  #nGo kbd { font: 500 10.5px var(--mono); margin-left: 5px; color: rgba(17, 17, 27, .65); }
+  .dock #new, .pill #new { display: none; }
+
+  /* ── dashboard: the same deck in a real window, with the conversation, the diff and a log of what happened ── */
+  #tabs, #feed, #talk, #diff, #boardBtn { display: none; }
+  .palette #boardBtn { display: inline-flex; align-items: center; }
+  .board.deck { border: 0; border-radius: 0; background: #181825; }
+  .board #pinBtn { display: none; }
+  .board #list { width: 340px; }
+  .board #tabs { display: flex; gap: 4px; padding: 0 20px 8px; flex: none; }
+  .board #tabs .btn[aria-selected="true"] { background: rgba(203, 166, 247, .2); border-color: rgba(203, 166, 247, .45); color: var(--text); }
+  .board #termBtn { display: none; }
+  .board #feed { display: flex; flex-direction: column; width: 300px; flex: none; border-left: 1px solid var(--line); overflow-y: auto; padding: 4px 8px 10px; }
+  .board[data-tab="talk"] #talk { display: block; }
+  .board[data-tab="talk"] :is(#askedLabel, #asked, #saidLabel, #said, #changedLabel, #changedList, #screenLabel, #screen, #doingLabel, #doing) { display: none; }
+  .board[data-tab="changes"] :is(#askedLabel, #asked, #saidLabel, #said, #screenLabel, #screen, #doingLabel, #doing) { display: none; }
+  .board[data-tab="changes"] #diff { display: block; }
+  .board[data-tab="term"] :is(#askedLabel, #asked, #saidLabel, #said, #changedLabel, #changedList, #doingLabel, #doing) { display: none; }
+  .board[data-tab="term"] #screen { max-height: none; }
+  .turn { margin: 0 0 14px; }
+  .turn .who { display: flex; gap: 8px; align-items: baseline; margin: 10px 0 4px; font: 600 11px var(--ui); color: var(--o1); letter-spacing: .02em; }
+  .turn .who span { font: 500 11px var(--mono); color: var(--o0); }
+  .turn .you { padding: 9px 12px; border-radius: 9px; background: rgba(203, 166, 247, .09); color: var(--text); font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .turn .it { font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
+  .turn .it p { margin: 0 0 7px; } .turn .it h4 { margin: 12px 0 5px; font: 600 13px var(--ui); color: var(--mauve); }
+  .turn .it ul { margin: 0 0 8px; padding-left: 18px; } .turn .it code { font: 11.5px var(--mono); padding: 1px 5px; border-radius: 4px; background: rgba(205, 214, 244, .08); color: var(--peach); }
+  .turn .it pre { margin: 0 0 8px; padding: 9px 11px; border-radius: 8px; background: rgba(17, 17, 27, .6); font: 11.5px/1.5 var(--mono); white-space: pre-wrap; color: var(--sub); }
+  .turn .it strong { font-weight: 600; color: #e6ebff; } .turn .it .link { color: var(--blue); text-decoration: underline; }
+  .turn .live { color: var(--green); font: 12px var(--mono); }
+  .turn .ran { margin-top: 6px; font-size: 12px; color: var(--o1); } .turn .ran summary { cursor: pointer; }
+  .turn .ran pre { margin: 6px 0 0; padding: 8px 11px; border-radius: 8px; background: rgba(205, 214, 244, .05); font: 11.5px/1.5 var(--mono); white-space: pre-wrap; color: var(--sub); }
+  #changedList .file { display: block; width: 100%; text-align: left; padding: 1px 4px; border-radius: 4px; font: inherit; color: inherit; cursor: default; }
+  .board #changedList { max-height: 208px; overflow-y: auto; }  /* a long list must not push the diff out of sight */
+  .board #changedList .file { cursor: pointer; } .board #changedList .file:hover, #changedList .file.on { background: rgba(203, 166, 247, .16); color: var(--text); }
+  #diff { margin: 8px 0 0; padding: 10px 12px; border-radius: 9px; background: rgba(17, 17, 27, .72); border: 1px solid var(--line); font: 11px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--sub); }
+  #diff .add { color: var(--green); } #diff .del { color: var(--red); } #diff .hunk { color: var(--mauve); }
+  .event { display: flex; gap: 9px; padding: 7px 8px; border-radius: 8px; cursor: pointer; }
+  .event:hover { background: rgba(205, 214, 244, .05); }
+  .event .glyph { margin-top: 2px; }
+  .event .what { flex: 1; min-width: 0; font-size: 12px; color: var(--sub); }
+  .event .what b { display: block; font-weight: 560; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .event .what span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .event time { flex: none; font: 500 10.5px var(--mono); color: var(--o1); }
+  .event.old { opacity: .55; }
+  #feed .mark { margin: 6px 8px; font: 500 10.5px var(--mono); color: var(--o0); text-align: center; border-top: 1px solid var(--line); padding-top: 6px; }
+
+  /* ── footer ── */
+  footer { flex: none; height: 32px; display: flex; align-items: center; gap: 14px; padding: 0 14px; font-size: 11.5px; color: var(--sub);
+    border-top: 1px solid var(--line); background: rgba(17, 17, 27, .32); white-space: nowrap; overflow: hidden; }
+  footer kbd { margin: 0 5px 0 0; color: var(--text); }
+  #keys span { margin-right: 14px; }
+  #toast { margin-left: auto; color: var(--green); font-weight: 500; opacity: 0; transition: opacity .2s; overflow: hidden; text-overflow: ellipsis; }
+  #toast.on { opacity: 1; } #toast.bad { color: var(--red); }
+
+  /* ── pinned strip: the list only. A row click drops in; the header opens the full deck ── */
+  .dock #view, .dock header > svg, .dock #q, .dock footer, .dock #pinBtn, .dock #newBtn, .dock .key { display: none; }
+  .dock header { height: 38px; padding: 0 8px 0 12px; cursor: pointer; } .dock #sum { margin-right: auto; }
+  .ico { display: none; width: 22px; height: 22px; border-radius: 6px; color: var(--sub); align-items: center; justify-content: center; }
+  .ico:hover { background: rgba(205, 214, 244, .1); color: var(--text); }
+  .dock #foldBtn { display: inline-flex; }
+  .row .look { display: none; flex: none; width: 22px; height: 22px; border-radius: 6px; color: var(--sub); align-items: center; justify-content: center; }
+  .dock .row:hover .look { display: inline-flex; } .row .look:hover { background: rgba(205, 214, 244, .12); color: var(--text); }
+  .dock .row { cursor: pointer; }
+
+  /* ── pill: the strip folded down to its counts. Click to unfold ── */
+  .pill main, .pill footer, .pill header > svg, .pill #foldBtn, .pill #q, .pill #pinBtn, .pill #newBtn, .pill #hot { display: none; }
+  .pill header { height: 100%; border: 0; padding: 0 10px; justify-content: center; cursor: pointer; }
+  .pill .chip { background: none; padding: 0 3px; font-size: 12px; } .pill .chip .word { display: none; }
+  .pill.deck, .dock.deck { transition: border-color .3s; }
+  .pill.wants, .dock.wants { border-color: rgba(249, 226, 175, .6); } .pill.stuck, .dock.stuck { border-color: rgba(243, 139, 168, .75); }
+  .dock .chip { padding: 0 7px; } .dock .chip .word { display: none; }
+  .chip i { width: 7px; height: 7px; flex: none; }
+  .chip.need i { background: var(--yellow); transform: rotate(45deg); border-radius: 1px; }
+  .chip.block i { background: var(--red); border-radius: 50%; }
+  .chip.work i { border: 1.5px solid var(--green); border-radius: 50%; }
+  .dock #list { width: auto; flex: 1; border-right: 0; padding-bottom: 8px; }
+  .dock .row.sel { background: none; box-shadow: none; } .dock .row:hover { background: rgba(205, 214, 244, .08); }
+  .dock .proj-head { padding-left: 12px; } .dock .row.nested { padding-left: 12px; }
+  #hot { display: none; font: 500 10.5px var(--mono); color: var(--o1); } .dock #hot { display: block; }
+
+  ::-webkit-scrollbar { width: 9px; height: 9px; } ::-webkit-scrollbar-thumb { background: rgba(205, 214, 244, .14); border-radius: 5px; border: 2px solid transparent; background-clip: content-box; }
+</style>
+</head>
+<body>
+<div id="deck" class="deck palette" data-tab="talk">
+  <header id="bar">
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.6"/><path d="M10.6 10.6 14 14"/></svg>
+    <input id="q" placeholder="Filter agents" spellcheck="false" autocomplete="off" role="combobox" aria-expanded="true" aria-controls="list" aria-label="Filter agents">
+    <div id="sum"></div>
+    <span id="hot"></span>
+    <button class="ico" id="foldBtn" type="button" title="Fold to a pill" aria-label="Fold to a pill"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 7.5 6 4l3.5 3.5"/></svg></button>
+    <button class="btn" id="boardBtn" type="button" title="Open the dashboard: conversation, changes and a log of what happened">Dashboard<kbd>⌘⇧D</kbd></button>
+    <button class="btn" id="newBtn" type="button">New<kbd>⌘N</kbd></button>
+    <button class="btn" id="pinBtn" type="button">Pin<kbd>⌘P</kbd></button>
+  </header>
+  <main>
+    <div id="list" role="listbox" aria-label="Agents"></div>
+    <section id="view" class="none">
+      <div id="head">
+        <div class="top">
+          <span class="state"></span>
+          <button class="btn" id="termBtn" type="button" aria-pressed="false">Terminal<kbd>⌘T</kbd></button>
+          <button class="btn" id="openBtn" type="button">Drop in<kbd>↩</kbd></button>
+        </div>
+        <h1></h1><div class="where"></div>
+      </div>
+      <div id="note" hidden></div>
+      <div id="tabs" role="tablist">
+        <button class="btn" type="button" role="tab" data-tab="talk">Conversation</button>
+        <button class="btn" type="button" role="tab" data-tab="changes">Changes</button>
+        <button class="btn" type="button" role="tab" data-tab="term">Terminal</button>
+      </div>
+      <div id="scroll">
+        <div id="talk"></div>
+        <div class="label" id="screenLabel">On its screen now</div><pre id="screen"></pre>
+        <div class="label" id="doingLabel">Doing now</div><div id="doing"></div>
+        <div class="label" id="askedLabel">You asked</div><div id="asked"></div>
+        <div class="label" id="saidLabel">It said</div><div id="said"></div>
+        <div class="label" id="commitLabel" hidden>Commits</div><pre id="commitList" hidden></pre>
+        <div class="label" id="changedLabel" hidden>Uncommitted files</div><pre id="changedList" hidden></pre>
+        <pre id="diff"></pre>
+      </div>
+      <div id="composer">
+        <div id="to"></div>
+        <div id="reply">
+          <textarea id="r" rows="1" spellcheck="false" aria-label="Reply"></textarea>
+          <button id="sendBtn" type="button">Send<kbd>⌘↩</kbd></button>
+        </div>
+      </div>
+    </section>
+    <aside id="feed" aria-label="What happened"></aside>
+    <section id="new" hidden>
+      <div><div class="state">New agent</div><h1>Start one without leaving what you are doing</h1></div>
+      <label>Project folder<input id="nProj" spellcheck="false" autocomplete="off" placeholder="type to search ~/personal, or a full path"></label>
+      <div id="nList"></div>
+      <div class="row2"><div class="seg"><button class="btn" id="nClaude" type="button">Claude</button><button class="btn" id="nCodex" type="button">Codex</button></div></div>
+      <label>Runs this command in a new tab<input id="nCmd" spellcheck="false" autocomplete="off"></label>
+      <label>First prompt (optional)<textarea id="nPrompt" rows="4" spellcheck="false" placeholder="What should it do?"></textarea></label>
+      <div class="row2"><span id="nWhy" role="status"></span><button id="nGo" type="button">Start<kbd>⌘↩</kbd></button></div>
+    </section>
+  </main>
+  <footer><span id="keys"></span><span id="toast" role="status"></span></footer>
+</div>
+
+<script>
+'use strict';
+const $ = (id) => document.getElementById(id);
+const post = (m) => window.webkit?.messageHandlers?.deck?.postMessage(m);
+const LABEL = { blocked: 'Blocked', yours: 'Your turn', working: 'Working', done: 'Finished' };
+let rows = [], seen = {}, sel = null, mode = 'palette', pinned = false, open = false;
+let drafts = {}, composing = null, pending = null;   // one draft per agent; the box always shows the selected agent's
+let failed = {};                                       // the last refused send: which agent, and why
+let queued = {}, gone = {};                            // id -> {text, since, sid}: a reply held for one particular turn of a busy agent
+let tab = 'talk', talks = {}, diffOf = {}, events = [], looked = 0;      // dashboard: which tab; conversation and diff of the selected agent; what happened, and when you last looked
+let seq = 0, slots = [], launching = 0, patience = 20000, changed = {};  // request numbers; frozen ⌘1–9; git status of the selected agent
+let creating = false, projects = [], commands = { claude: 'claude', codex: 'codex' }, kind = 'claude', pick = 0;
+let staleFor = 0, screens = {}, peek = false, bodySig = '', asksOpen = false;
+
+function el(tag, parent, text, cls) {
+  const e = document.createElement(tag);
+  if (text != null) e.textContent = text;
+  if (cls) e.className = cls;
+  if (parent) parent.append(e);
+  return e;
+}
+function ago(since) {
+  if (!since) return '';
+  const s = Math.max(0, Date.now() / 1000 - since);
+  for (const [u, n] of [['d', 86400], ['h', 3600], ['m', 60]]) if (s >= n) return Math.floor(s / n) + u;
+  return Math.floor(s) + 's';
+}
+const timed = (r) => !r.since ? '' : r.state === 'done' ? 'finished ' + ago(r.since) + ' ago' : (r.state === 'working' ? 'working ' : 'waiting ') + ago(r.since);
+const first = (t) => (t || '').trim().split('\n')[0].replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/[*`#]/g, '');
+const quiet = (r) => r.state === 'working' && r.moved && Date.now() / 1000 - r.moved > 300 ? 'quiet ' + ago(r.moved) : '';  // no output for a while: a long tool call, or stuck
+const workers = (r) => r.kind === 'claude' && r.note ? rows.filter((x) => x.kind === 'exec' && x.state === 'working' && x.proj === r.proj).length : 0;
+const noted = (r) => r.note + (workers(r) ? ' · ' + workers(r) + ' headless runs in this project still working' : '');
+const stage = (r) => r.state === 'working' ? [quiet(r), r.doing || first(r.said)].filter(Boolean).join(' · ') : [r.note && noted(r), first(r.said)].filter(Boolean).join(' · ');
+const place = (r) => r.tab ? (r.window ? 'window ' + r.window + ' tab ' + r.tab : 'tab ' + r.tab) : '';
+const attention = (r) => r.state === 'blocked' || r.state === 'yours';
+const isNew = (r) => attention(r) && seen[r.id] !== r.since;   // not yet dealt with since it last stopped
+const current = () => rows.find((r) => r.id === sel);
+
+/* Agent text is untrusted: everything below builds DOM nodes with textContent, never innerHTML. */
+function inline(parent, text) {
+  const re = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|\[([^\]\n]+)\]\(([^)\s]+)\)/g;
+  let i = 0, m;
+  while ((m = re.exec(text))) {
+    if (m.index > i) parent.append(text.slice(i, m.index));
+    if (m[1]) el('code', parent, m[1].slice(1, -1));
+    else if (m[2]) inline(el('strong', parent), m[2].slice(2, -2));
+    else { const a = el('button', parent, m[3], 'link'), url = m[4]; a.type = 'button'; a.title = url; a.onclick = () => post({ cmd: 'open', url }); }
+    i = re.lastIndex;
+  }
+  if (i < text.length) parent.append(text.slice(i));
+}
+function render(parent, text) {
+  parent.textContent = '';
+  let list = null, pre = null, table = null;
+  for (const raw of text.split('\n')) {
+    if (raw.trimStart().startsWith('```')) { pre = pre ? null : el('pre', parent); list = table = null; continue; }
+    if (pre) { pre.append(raw + '\n'); continue; }
+    const line = raw.trimEnd();
+    let m;
+    if (/^\s*\|.*\|\s*$/.test(line)) {  // a markdown table row
+      list = null;
+      const cells = line.trim().slice(1, -1).split('|').map((c) => c.trim());
+      if (cells.every((c) => /^:?-{2,}:?$/.test(c))) continue;  // the rule under the header
+      table = table || el('table', parent);
+      const tr = el('tr', table);
+      for (const c of cells) inline(el(table.rows.length === 1 ? 'th' : 'td', tr), c);
+      continue;
+    }
+    table = null;
+    if (!line.trim()) list = null;
+    else if ((m = /^#{1,4}\s+(.*)/.exec(line))) { list = null; inline(el('h4', parent), m[1]); }
+    else if ((m = /^\s*(?:[-*•]|\d+[.)])\s+(.*)/.exec(line))) { list = list || el('ul', parent); inline(el('li', list), m[1]); }
+    else { list = null; inline(el('p', parent), line); }
+  }
+}
+
+function visible() {
+  const q = $('q').value.trim().toLowerCase();
+  return q ? rows.filter((r) => [r.title, r.proj, r.kind, LABEL[r.state], r.note, r.doing, first(r.said), r.prompt].join(' ').toLowerCase().includes(q)) : rows;
+}
+/* Everything that wants you comes first, whatever its project; working agents are grouped by project below. */
+function layout() {
+  const v = visible();
+  const need = v.filter(attention).sort((a, b) => isNew(b) - isNew(a));  // ag sends the most urgent first; dealt-with ones sink
+  const groups = new Map();
+  for (const r of v) if (r.state === 'working') (groups.get(r.proj) || groups.set(r.proj, []).get(r.proj)).push(r);
+  const done = v.filter((r) => r.state === 'done');
+  return { need, groups: [...groups], done, flat: [...need, ...[...groups.values()].flat(), ...done] };
+}
+/* The selection must always be something on screen, or nothing. */
+function reconcile() {
+  if (document.activeElement === $('r') && rows.some((r) => r.id === sel)) return;  // never swap the recipient under someone who is typing
+  const flat = layout().flat;
+  if (!flat.some((r) => r.id === sel)) sel = flat[0]?.id ?? null;
+}
+
+/* Numbers go to agents that have a tab, in the order shown when the deck opened; later reshuffles do not renumber. */
+function renumber() { slots = layout().flat.filter((r) => r.pane != null).slice(0, 9).map((r) => r.id); }
+function drawList() {
+  const list = $('list'), top = list.scrollTop, L = layout();
+  if (!slots.length) renumber();
+  list.textContent = '';
+  const section = (name, n, cls) => el('span', el('div', list, name, 'section'), String(n), 'n ' + (cls || ''));
+  const add = (r, nested) => {
+    const row = el('div', list, null, ['row', r.state, r.kind === 'exec' && 'exec', r.id === sel && 'sel', attention(r) && !isNew(r) && 'seen', nested && 'nested'].filter(Boolean).join(' '));
+    row.id = 'row-' + r.id; row.dataset.id = r.id;
+    row.setAttribute('role', 'option'); row.setAttribute('aria-selected', r.id === sel);
+    row.setAttribute('aria-label', `${LABEL[r.state]}, ${r.proj}: ${r.title}, ${timed(r)}`);
+    const age = Date.now() / 1000 - r.since;
+    if (isNew(r) && age < 8) { row.classList.add('fresh'); row.style.animationDelay = -age + 's'; }  // a brief glow when it first needs you
+    el('i', el('span', row, null, 'glyph'));
+    const body = el('div', row, null, 'body');
+    if (r.kind === 'exec') {
+      const t = el('div', body, null, 'title'); el('b', t, r.title.split(' · ')[0]);
+      if (!nested) el('span', t, r.proj, 'tag proj');
+      t.append(' ' + (stage(r) || r.title.split(' · ')[1] || ''));
+    } else {
+      el('div', body, r.title, 'title');
+      const line = el('div', body, null, 'line');
+      el('span', line, r.kind, 'tag ' + r.kind);
+      if (!nested) el('span', line, r.proj, 'tag proj');
+      line.append(pending?.id === r.id ? 'sending your reply…' : [queued[r.id] && '↩ reply queued', stage(r)].filter(Boolean).join(' · '));
+    }
+    const meta = el('div', row, null, 'meta');
+    el('span', meta, ago(r.since), 'age').title = timed(r);
+    const slot = slots.indexOf(r.id) + 1;
+    if (slot) el('span', meta, '⌘' + slot, 'key').title = 'Drop in with ⌘' + slot;
+    const look = el('button', meta, null, 'look'); look.type = 'button'; look.title = 'Open the deck on this agent'; look.setAttribute('aria-label', look.title);
+    look.textContent = '⤢'; look.onclick = (e) => { e.stopPropagation(); select(r.id); post({ cmd: 'expand', id: r.id }); };
+    row.onclick = () => {  // in the strip a click takes you straight there; a headless run has no tab, so it opens the deck instead
+      select(r.id);
+      if (mode === 'dock') r.pane != null ? jump(r) : post({ cmd: 'expand', id: r.id });
+    };
+    row.ondblclick = () => jump(r);
+  };
+  if (!L.flat.length) el('div', list, rows.length ? 'No agent matches.' : 'No agents running.', 'none');
+  if (L.need.length) { section('Needs you', L.need.length, L.need.some((r) => r.state === 'blocked') ? 'block' : 'need'); L.need.forEach((r) => add(r)); }
+  if (L.groups.length) {
+    section('Working', L.groups.reduce((n, [, g]) => n + g.length, 0));
+    for (const [proj, g] of L.groups) {
+      const grouped = g.length > 1 || g[0].kind === 'exec';  // a lone agent carries its project on its own line
+      if (grouped) el('div', list, proj, 'proj-head');
+      g.forEach((r) => add(r, grouped));
+    }
+  }
+  if (L.done.length) { section('Finished', L.done.length); L.done.forEach((r) => add(r)); }
+  list.scrollTop = top;
+  $('q').setAttribute('aria-activedescendant', sel ? 'row-' + sel : '');
+}
+
+function drawView() {
+  const r = current();
+  $('view').classList.toggle('none', !r);
+  if (!r) { bodySig = ''; return syncComposer(null); }
+  // identity and what you can do: recomputed on every update, so it can never go stale
+  $('view').dataset.state = r.state;
+  const st = $('head').querySelector('.state'); st.textContent = '';
+  el('i', el('span', st, null, 'glyph')); st.className = 'state ' + r.state;
+  st.append(LABEL[r.state] + (attention(r) && !isNew(r) ? ' · seen' : ''));
+  $('head').querySelector('h1').textContent = r.title;
+  $('head').querySelector('.where').textContent = [r.kind === 'exec' ? 'headless codex' : r.kind, r.proj + (r.branch ? ' ⎇ ' + r.branch : ''), place(r), r.subs ? '+' + r.subs + ' subagents' : '', timed(r), quiet(r)].filter(Boolean).join(' · ');
+  $('openBtn').hidden = $('termBtn').hidden = r.pane == null;
+  $('termBtn').setAttribute('aria-pressed', peek);
+  $('note').hidden = !r.note;
+  if (r.note) { $('note').className = r.state; $('note').textContent = r.state === 'blocked' ? 'Waiting on: ' + r.note + '. Drop in to answer it.' : noted(r)[0].toUpperCase() + noted(r).slice(1) + '.'; }
+  // the text: only redrawn when it changes, and without losing your place while you read
+  const sig = [r.id, r.state, r.prompt, r.said, r.doing, r.cut].join('\u0001');
+  if (sig !== bodySig) {
+    const same = bodySig.startsWith(r.id + '\u0001'), y = $('scroll').scrollTop;
+    if (!same) asksOpen = false;
+    bodySig = sig;
+    $('doingLabel').hidden = $('doing').hidden = !(r.state === 'working' && r.doing);
+    $('doing').textContent = r.doing || '';
+    $('askedLabel').hidden = $('asked').hidden = !r.prompt;
+    $('asked').textContent = r.prompt.trim();
+    $('asked').className = r.prompt.length < 230 && r.prompt.split('\n').length < 4 ? 'short' : asksOpen ? 'open' : '';
+    $('saidLabel').textContent = r.state === 'working' ? 'Latest from it' : r.state === 'done' ? 'Final message' : 'It said';
+    render($('said'), r.said || 'Nothing yet.');
+    if (r.cut) el('p', $('said'), 'Cut at 4,000 characters. Drop in for the rest.', 'cut');
+    $('scroll').scrollTop = same ? y : 0;
+  }
+  drawScreen(r);
+  drawChanges(r);
+  drawTalk(r);
+  syncComposer(r);
+}
+/* The terminal itself, for a blocked agent (so you can read the question) or on request. */
+function drawScreen(r) {
+  const show = r.pane != null && (peek || (r.state === 'blocked' && mode !== 'board'));
+  $('screenLabel').hidden = $('screen').hidden = !show;
+  if (!show) return;
+  const text = screens[r.id];
+  const box = $('screen'), atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 4, was = box.dataset.id;
+  box.textContent = text == null ? 'Reading the terminal…' : text.replace(/\s+$/, '').replace(/[ \t]+$/gm, '') || '(empty screen)';
+  box.dataset.id = r.id;
+  if (atEnd || was !== r.id) box.scrollTop = box.scrollHeight;  // start at the bottom, where the question is; stay put if you scrolled up
+}
+function wantScreen() {
+  const r = current();
+  if (open && (mode === 'palette' || mode === 'board') && r && r.pane != null && (peek || (r.state === 'blocked' && mode === 'palette'))) post({ cmd: 'screen', id: r.id });
+}
+
+/* The reply box. A draft belongs to the agent it was typed for and follows the selection. */
+function syncComposer(r) {
+  const id = r ? r.id : null;
+  if (composing !== id) {
+    if (document.activeElement === $('r')) $('q').focus();  // a different agent: typing must not carry on into its box
+    if (composing && !queued[composing]) { if ($('r').value.trim()) drafts[composing] = $('r').value; else delete drafts[composing]; }
+    composing = id; $('r').value = (id && (queued[id]?.text || drafts[id])) || ''; grow();
+  }
+  if (!r) return;
+  const why = staleFor ? 'Agent status is out of date, so replies are off until it is fresh again.'
+    : r.pane == null ? (r.state === 'done' ? 'This headless run has finished.' : r.kind === 'exec' ? 'Headless run: there is no terminal to reply to.' : 'Not in a WezTerm tab, so there is nowhere to send a reply.')
+    : r.state === 'blocked' && !queued[id] ? 'Blocked on a dialog. Press ↩ to drop in and answer it there.' : '';
+  const busy = pending?.id === id, held = !why && !!queued[id], later = !why && r.state === 'working';
+  if (held && $('r').value !== queued[id].text) { $('r').value = queued[id].text; grow(); }
+  $('composer').classList.toggle('off', !!why);
+  if (why && document.activeElement === $('r')) $('q').focus();
+  $('r').disabled = !!why; $('r').readOnly = busy || held;
+  $('to').textContent = '';
+  $('to').classList.toggle('bad', !why && !busy && failed.id === id);
+  if (!why && !busy && failed.id === id) $('to').textContent = failed.reason;
+  else if (why) $('to').textContent = r.state === 'blocked' && r.pane != null ? '' : why;
+  else { $('to').append(busy ? 'Sending to ' : held ? 'Queued for ' : later ? 'Queue for ' : 'Reply to '); el('b', $('to'), r.title); if (held || later) $('to').append(': sent the moment it finishes its turn'); }
+  $('r').placeholder = later ? 'It is busy. Write now; it is sent when this turn ends' : 'Pasted into its prompt and submitted, without leaving this window';
+  $('sendBtn').disabled = !!why || busy || (!held && !$('r').value.trim());
+  $('sendBtn').firstChild.textContent = busy ? 'Sending' : held ? 'Cancel' : later ? 'Queue' : 'Send';
+  $('sendBtn').classList.toggle('plain', held);
+}
+function grow() {  // while the box is not on screen (the pinned strip) it measures 0: leave the height alone then
+  const r = $('r'); r.style.height = 'auto'; r.style.height = r.scrollHeight ? Math.min(104, r.scrollHeight) + 'px' : '';
+}
+
+function drawSum() {
+  const s = $('sum'); s.textContent = '';
+  const blocked = rows.filter((r) => r.state === 'blocked' && isNew(r)).length, fresh = rows.filter((r) => r.state === 'yours' && isNew(r)).length;
+  const working = rows.filter((r) => r.state === 'working').length;
+  const chip = (n, word, cls) => { const c = el('span', s, null, 'chip ' + cls); el('i', c); el('b', c, String(n)); el('span', c, word, 'word'); c.title = n + ' ' + word; };
+  if (staleFor) el('span', s, 'status ' + staleFor + 's old', 'chip stale');
+  if (blocked) chip(blocked, 'blocked', 'block');
+  if (fresh) chip(fresh, fresh === 1 ? 'needs you' : 'need you', 'need');
+  chip(working, 'working', 'work');
+  $('deck').classList.toggle('stuck', blocked > 0); $('deck').classList.toggle('wants', !blocked && fresh > 0);
+}
+function drawKeys() {
+  const k = $('keys'); k.textContent = '';
+  const busy = current()?.state === 'working';
+  const hints = creating ? [['⌘↩', 'start it'], ['esc', 'cancel']]
+    : document.activeElement === $('r') ? (busy ? [['⌘↩', 'queue for when it finishes'], ['esc', 'back to list']] : [['⌘↩', 'send'], ['⇧⌘↩', 'paste and drop in'], ['esc', 'back to list']])
+    : [['↑↓', 'move'], ['↩', 'drop in'], ['⇥', 'reply'], ['⌘T', 'terminal'], ['⌘D', 'seen'], ['⌘N', 'new agent'], mode === 'board' ? ['⌘W', 'close'] : ['⌘⇧D', 'dashboard'], ...(mode === 'board' ? [] : [['esc', 'close']])];
+  for (const [key, word] of hints) { const s = el('span', k); el('kbd', s, key); s.append(word); }
+}
+function draw() {
+  reconcile(); drawSum(); drawList(); drawView(); drawNew(); drawFeed(); drawKeys();
+  if (mode === 'dock') {  // the pinned strip is only as tall as its agents
+    const h = 38 + 14 + [...$('list').children].reduce((n, c) => n + c.offsetHeight, 0);
+    if (h !== draw.h) post({ cmd: 'height', height: (draw.h = h) });
+  }
+  if (mode === 'pill') {  // and the pill only as wide as its counts
+    const w = Math.ceil($('sum').getBoundingClientRect().width) + 26;
+    if (w !== draw.w) post({ cmd: 'width', width: (draw.w = w) });
+  }
+}
+
+function select(id) {
+  if (id !== sel) diffOf = {};
+  sel = id; draw(); wantScreen(); wantChanges(); wantTalk();
+  $('list').querySelector('.sel')?.scrollIntoView({ block: 'nearest' });
+}
+function move(d) {
+  const f = layout().flat; if (!f.length) return;
+  const i = f.findIndex((r) => r.id === sel);
+  select(f[Math.max(0, Math.min(f.length - 1, i < 0 ? 0 : i + d))].id);
+}
+function markSeen(r, on = true) {
+  if (!r || !attention(r)) return;
+  if (on) seen[r.id] = r.since; else delete seen[r.id];
+  post({ cmd: 'seen', id: r.id, since: on ? r.since : null });
+}
+function jump(r) {
+  if (!r) return;
+  if (r.pane == null) return toast(r.kind === 'exec' ? 'Headless run: there is no tab to open' : 'That agent is not in a WezTerm tab', true);
+  post({ cmd: 'jump', id: r.id });
+}
+function send(submit) {
+  const r = current(), text = $('r').value.trim();
+  if (r && queued[r.id]) { unqueue(r.id); draw(); return $('r').focus(); }  // ⌘↩ on a queued reply takes it back
+  if (!r || r.id !== composing || !text || $('r').disabled || pending) return;
+  if (text.length > 20000) return toast('Too long to paste safely (over 20,000 characters)', true);
+  if (r.state === 'working') {  // busy: hold the reply for this turn and deliver it when the turn ends
+    if (!submit) return toast('It is still working, so there is no prompt to paste into yet', true);
+    queued[r.id] = { text, since: r.since, sid: r.sid, prompt: r.prompt }; delete drafts[r.id]; failed = {}; keep();
+    toast('Queued for ' + r.title); $('q').focus();
+    return draw();
+  }
+  deliver(r, text, submit, false);
+}
+/* Hands a reply to the app. The text stays where it is (box or queue) until the app answers this exact request. */
+function deliver(r, text, submit, fromQueue) {
+  failed = {};
+  const mine = pending = { id: r.id, title: r.title, submit, fromQueue, req: ++seq };
+  setTimeout(() => {  // no answer: delivery is unknown, so nothing is retried on its own
+    if (pending !== mine) return;
+    pending = null;
+    const why = 'No confirmation from the app. Check that terminal before sending again.';
+    if (fromQueue) unqueue(r.id, why); else { failed = { id: r.id, reason: why }; toast('Not confirmed', true); }
+    draw();
+  }, patience);
+  post({ cmd: 'send', id: r.id, sid: r.sid || '', text, submit, req: mine.req });
+  if (!fromQueue) toast('Sending…');
+  draw();
+}
+/* A queued reply goes back to being a draft: because you cancelled it, or (with a reason) because its moment passed. */
+function unqueue(id, why) {
+  const q = queued[id]; if (!q) return;
+  drafts[id] = q.text; delete queued[id]; delete gone[id]; keep();
+  if (composing === id) { $('r').value = q.text; grow(); }
+  if (why) { failed = { id, reason: 'Queued reply not sent: ' + why }; post({ cmd: 'banner', id, title: 'Queued reply not sent', body: why }); }
+}
+/* Drafts and queued replies are kept by the app too, so quitting it cannot lose them (they come back as drafts). */
+function keep() {
+  clearTimeout(keep.t);
+  keep.t = setTimeout(() => {
+    const all = { ...drafts };
+    if (composing && !queued[composing] && $('r').value.trim()) all[composing] = $('r').value;
+    for (const id of Object.keys(queued)) all[id] = queued[id].text;
+    post({ cmd: 'keep', drafts: all });
+  }, 400);
+}
+/* What git says changed where the selected agent is working. */
+function wantChanges() {
+  const r = current();
+  if (open && (mode === 'palette' || (mode === 'board' && tab === 'changes')) && !creating && r && r.branch && (changed.id !== r.id || Date.now() - changed.at > 15000)) {
+    changed = { id: r.id, at: Date.now(), info: changed.id === r.id ? changed.info : null };
+    post({ cmd: 'changes', id: r.id });
+  }
+}
+function drawChanges(r) {
+  const info = changed.id === r.id && changed.info ? changed.info : { files: [], commits: [] };
+  const files = info.files || [], commits = info.commits || [];
+  $('commitLabel').hidden = $('commitList').hidden = !commits.length || mode !== 'board';
+  $('commitLabel').textContent = `Commits since you last prompted it · ${commits.length}`;
+  $('commitList').textContent = commits.join('\n');
+  $('changedLabel').hidden = $('changedList').hidden = !files.length;
+  const ahead = /\[(.*)\]/.exec(info.branch || '');
+  $('changedLabel').textContent = `Uncommitted files · ${files.length + (info.more || 0)}${ahead ? ' · ' + ahead[1] : ''}`;
+  const box = $('changedList'), most = mode === 'board' ? 400 : 12; box.textContent = '';
+  for (const f of files.slice(0, most)) {
+    const b = el('button', box, f.code + ' ' + f.path, 'file' + (diffOf.id === r.id && diffOf.file === f.path ? ' on' : '')); b.type = 'button';
+    b.onclick = () => { if (mode !== 'board') return; diffOf = { id: r.id, file: f.path, text: null }; post({ cmd: 'diff', id: r.id, file: f.path, untracked: f.code === '??' }); drawChanges(r); };
+  }
+  const rest = files.length - Math.min(files.length, most) + (info.more || 0);
+  if (rest > 0) box.append(`… and ${rest} more`);
+  drawDiff(r);
+}
+function drawDiff(r) {
+  const d = $('diff'); d.textContent = '';
+  if (mode !== 'board' || tab !== 'changes') return;
+  if (diffOf.id !== r.id) {  // never another agent's diff under this agent's name
+    const have = changed.id === r.id && changed.info;
+    d.textContent = !r.branch ? 'Not a git repository, so there is nothing to compare against.' : !have ? 'Reading…' : have.files.length ? 'Pick a file to see what changed in it.' : 'Nothing uncommitted here.';
+    return;
+  }
+  if (diffOf.text == null) { d.textContent = 'Reading the diff…'; return; }
+  for (const line of (diffOf.text || 'No difference to show (a new or binary file).').split('\n').slice(0, 600)) {
+    el('span', d, line + '\n', line.startsWith('+') && !line.startsWith('+++') ? 'add' : line.startsWith('-') && !line.startsWith('---') ? 'del' : line.startsWith('@@') ? 'hunk' : '');
+  }
+}
+/* The conversation so far: each thing you asked and the answer it ended on. */
+function wantTalk() {
+  const r = current();
+  if (!open || mode !== 'board' || tab !== 'talk' || creating || !r) return;
+  const sig = [r.prompt, r.state, r.since].join('\u0001'), have = talks[r.id];
+  if (have && (have.sig === sig || Date.now() - have.asked < 4000)) return;  // up to date, or already asked a moment ago
+  talks[r.id] = { sig: have ? have.sig : null, want: sig, asked: Date.now(), turns: have ? have.turns : null };
+  post({ cmd: 'talk', id: r.id });
+}
+function drawTalk(r) {
+  const box = $('talk'), have = talks[r.id];
+  if (mode !== 'board' || tab !== 'talk') return;
+  const sig = r.id + (have && have.turns ? JSON.stringify(have.turns).length : 0) + r.state + r.said.length;
+  if (box.dataset.sig === sig) return;
+  const atEnd = box.dataset.id !== r.id || $('scroll').scrollTop + $('scroll').clientHeight >= $('scroll').scrollHeight - 30;
+  box.dataset.sig = sig; box.dataset.id = r.id; box.textContent = '';
+  const turns = have && have.turns ? have.turns : [{ you: r.prompt, at: null, said: r.state === 'working' ? '' : r.said, steps: 0 }];
+  turns.forEach((t, i) => {
+    const turn = el('div', box, null, 'turn'), last = i === turns.length - 1;
+    if (t.you) { const w = el('div', turn, 'You', 'who'); if (t.at) el('span', w, ago(t.at) + ' ago'); el('div', turn, t.you, 'you'); }
+    const w = el('div', turn, r.kind === 'claude' ? 'Claude' : 'Codex', 'who');
+    const cut = t.open && !last;  // you sent the next message before it had finished this one
+    el('span', w, [t.steps ? t.steps + ' tool calls' : '', t.stopped ? 'you interrupted it' : cut ? 'not finished when you wrote again' : ''].filter(Boolean).join(' · '));
+    if (t.said && !(last && t.open && r.state === 'working')) render(el('div', turn, null, 'it'), t.said);
+    if (last && r.state === 'working') el('div', turn, 'working · ' + (r.doing || first(r.said) || 'no narration yet'), 'live');
+    else if (!t.said) el('div', turn, cut ? 'Answered together with your next message.' : 'No answer recorded for this one.', 'live').style.color = 'var(--o1)';
+    if (t.ran && t.ran.length) {
+      const d = el('details', turn, null, 'ran'); el('summary', d, `What it ran · ${t.ran.length}`);
+      el('pre', d, t.ran.join('\n'));
+    }
+  });
+  if (have && have.turns && !have.turns.length) el('div', box, 'No conversation in reach of the log yet.', 'none');
+  if (atEnd) $('scroll').scrollTop = $('scroll').scrollHeight;  // the newest exchange is at the bottom
+}
+/* What happened, newest first: who finished, who got stuck, what started. Anything since you last looked is bright. */
+function drawFeed() {
+  const feed = $('feed'); if (mode !== 'board') return;
+  feed.textContent = '';
+  el('div', feed, 'What happened', 'section');
+  if (!events.length) el('div', feed, 'Nothing yet. Hand-backs, blocks and finished runs will be listed here.', 'none');
+  let marked = false;
+  for (const e of [...events].reverse().slice(0, 80)) {
+    if (!marked && looked && e.at <= looked) { marked = true; if (feed.children.length > 1) el('div', feed, 'earlier', 'mark'); }
+    const row = el('div', feed, null, 'event ' + e.state + (looked && e.at <= looked ? ' old' : ''));
+    el('i', el('span', row, null, 'glyph'));
+    const what = el('div', row, null, 'what'); el('b', what, e.title); el('span', what, [e.proj, e.text].filter(Boolean).join(' · '));
+    el('time', row, ago(e.at));
+    row.onclick = () => { if (rows.some((r) => r.id === e.id)) { $('q').value = ''; select(e.id); } else toast('That agent is no longer running', true); };
+  }
+}
+function setTab(t) {
+  tab = t; $('deck').dataset.tab = t;
+  for (const b of $('tabs').children) b.setAttribute('aria-selected', b.dataset.tab === t);
+  peek = t === 'term'; bodySig = ''; draw(); wantScreen(); wantChanges(); wantTalk();
+}
+/* Starting an agent: a project folder, the command you normally run, and optionally its first prompt. */
+function matches() {
+  const q = $('nProj').value.trim().toLowerCase();
+  return projects.filter((p) => !q || p.name.toLowerCase().includes(q)).slice(0, 8);
+}
+function drawNew() {
+  $('new').hidden = !creating; $('view').style.display = creating ? 'none' : '';
+  if (!creating) return;
+  const list = $('nList'), m = matches(); list.textContent = '';
+  pick = Math.max(0, Math.min(pick, m.length - 1));
+  m.forEach((p, i) => { const b = el('button', list, p.name, i === pick ? 'on' : ''); b.type = 'button'; b.title = p.path; b.onclick = () => { $('nProj').value = p.name; pick = 0; drawNew(); $('nPrompt').focus(); }; });
+  $('nClaude').setAttribute('aria-pressed', kind === 'claude'); $('nCodex').setAttribute('aria-pressed', kind === 'codex');
+}
+function openNew(on) {
+  creating = on; pick = 0; $('nWhy').textContent = '';
+  if (on) {
+    const r = current();
+    if (r && r.kind !== 'exec') kind = r.kind;
+    $('nProj').value = r && r.cwd ? r.cwd : '';  // the exact folder (a worktree stays a worktree), not its project's main checkout
+    $('nCmd').value = commands[kind];
+  }
+  draw();
+  (on ? $('nProj') : $('q')).focus(); if (on) $('nProj').select();
+}
+function setKind(k) { commands[kind] = $('nCmd').value; kind = k; $('nCmd').value = commands[k]; drawNew(); }
+function start() {
+  const typed = $('nProj').value.trim(), m = matches();
+  const dir = /^[\/~]/.test(typed) ? typed : (projects.find((p) => p.name === typed) || m[pick] || {}).path;
+  const command = $('nCmd').value.trim();
+  if (!dir) return ($('nWhy').textContent = 'Pick a project folder first.');
+  if (!command) return ($('nWhy').textContent = 'The command is empty.');
+  if (launching) return;  // one at a time: two agents started in the same checkout is never what you meant
+  commands[kind] = command; $('nWhy').textContent = 'Starting…'; $('nGo').disabled = true;
+  const mine = launching = ++seq; start.sent = $('nPrompt').value;
+  setTimeout(() => { if (launching === mine) { launching = 0; $('nGo').disabled = false; $('nWhy').textContent = 'No answer from the app. Look for the new tab before trying again.'; } }, patience);
+  post({ cmd: 'launch', kind, dir, command, prompt: $('nPrompt').value.trim(), rev: mine });
+}
+function togglePeek() { peek = !peek; if (peek) screens = {}; draw(); wantScreen(); }
+function toast(text, bad) {
+  const t = $('toast'); t.textContent = text; t.className = 'on' + (bad ? ' bad' : '');
+  clearTimeout(toast.t); toast.t = setTimeout(() => (t.className = ''), bad ? 6000 : 2600);
+}
+
+/* One place for every key, so the app shell and the tests can drive it without a keyboard. */
+function press(key, mod = {}) {
+  const inReply = document.activeElement === $('r'), k = key.length === 1 ? key.toLowerCase() : key;
+  if (mod.meta && mod.shift && k === 'd') return post({ cmd: 'board', on: mode !== 'board' }), true;
+  if (mod.meta && k === 'n') return openNew(!creating), true;
+  if (creating) {  // the form keeps its own keys; only these four mean something else
+    if (mod.meta && k === 'Enter') return start(), true;
+    if (key === 'Escape') return openNew(false), true;
+    if (document.activeElement === $('nProj') && (key === 'ArrowDown' || key === 'ArrowUp')) return (pick += key === 'ArrowDown' ? 1 : -1), drawNew(), true;
+    if (document.activeElement === $('nProj') && (key === 'Enter' || (key === 'Tab' && !mod.shift))) { const m = matches()[pick]; if (m) $('nProj').value = m.name; pick = 0; drawNew(); $('nPrompt').focus(); return true; }
+    return false;
+  }
+  if (mod.meta && k === 'Enter') return inReply ? send(!mod.shift) : jump(current()), true;
+  if (mod.meta && /^[1-9]$/.test(k)) return jump(rows.find((r) => r.id === slots[+k - 1])), true;
+  if (mod.meta && k === 'p') return post({ cmd: 'pin', on: !pinned }), true;
+  if (mod.meta && k === 't') return (mode === 'board' ? setTab(tab === 'term' ? 'talk' : 'term') : togglePeek()), true;
+  if (mod.meta && k === 'd') { const r = current(); markSeen(r, r && isNew(r)); draw(); return true; }
+  if (key === 'Escape') {
+    if (inReply) return $('q').focus(), true;
+    if ($('q').value) { $('q').value = ''; reconcile(); renumber(); draw(); return true; }
+    return mode === 'board' ? true : (post({ cmd: 'hide' }), true);  // the dashboard is a window: close it like one
+  }
+  if (key === 'Tab') {  // from the filter straight to the reply box; everywhere else Tab walks the controls as usual
+    if (document.activeElement !== $('q') || mod.shift || $('r').disabled || !current()) return false;
+    return $('r').focus(), true;
+  }
+  if (inReply) return false;  // while you are writing, every other key belongs to the text
+  if (key === 'ArrowDown' || (mod.ctrl && k === 'n')) return move(1), true;
+  if (key === 'ArrowUp' || (mod.ctrl && k === 'p')) return move(-1), true;
+  if (key === 'Enter') return jump(current()), true;
+  return false;
+}
+document.addEventListener('keydown', (e) => {
+  if (e.isComposing) return;  // an input method is mid-word
+  if (e.target.closest?.('button') && (e.key === 'Enter' || e.key === ' ')) return;  // a focused button does its own thing
+  if (press(e.key, { meta: e.metaKey, ctrl: e.ctrlKey, shift: e.shiftKey })) e.preventDefault();
+});
+document.addEventListener('focusin', drawKeys);
+$('q').addEventListener('input', () => { if ($('q').value) creating = false; reconcile(); renumber(); draw(); });
+$('r').addEventListener('input', () => { grow(); keep(); $('sendBtn').disabled = !$('r').value.trim() || !!pending; });
+$('sendBtn').onclick = () => send(true);
+$('openBtn').onclick = () => jump(current());
+$('termBtn').onclick = togglePeek;
+$('pinBtn').onclick = () => post({ cmd: 'pin', on: !pinned });
+$('newBtn').onclick = () => openNew(!creating);
+$('boardBtn').onclick = () => post({ cmd: 'board', on: true });
+for (const b of $('tabs').children) b.onclick = () => setTab(b.dataset.tab);
+$('nGo').onclick = start;
+$('nClaude').onclick = () => setKind('claude'); $('nCodex').onclick = () => setKind('codex');
+$('nProj').addEventListener('input', () => { pick = 0; drawNew(); });
+$('asked').onclick = () => { if (!getSelection().toString()) { asksOpen = !asksOpen; bodySig = ''; drawView(); } };
+$('foldBtn').onclick = (e) => { e.stopPropagation(); post({ cmd: 'fold', on: true }); };
+/* The strip and the pill can be dragged by their header; a press that does not move is a click. */
+let drag = null;
+$('bar').addEventListener('mousedown', (e) => { if (mode !== 'palette' && !e.target.closest('button')) drag = { x: e.screenX, y: e.screenY, moved: false }; });
+window.addEventListener('mousemove', (e) => {
+  if (!drag || (!drag.moved && Math.hypot(e.screenX - drag.x, e.screenY - drag.y) < 4)) return;
+  post({ cmd: 'move', dx: e.screenX - drag.x, dy: e.screenY - drag.y });
+  drag = { x: e.screenX, y: e.screenY, moved: true };
+});
+window.addEventListener('mouseup', (e) => {
+  const d = drag; drag = null;
+  if (!d || d.moved) return d && post({ cmd: 'moved' });
+  if (mode === 'pill') post({ cmd: 'fold', on: false }); else if (mode === 'dock') post({ cmd: 'expand', id: sel });
+});
+setInterval(() => { wantScreen(); wantChanges(); wantTalk(); }, 2000);
+setInterval(() => { if (open && rows.length) { drawList(); drawView(); } }, 20000);  // keep the ages honest between updates
+
+window.deck = {
+  /* every line of `ag stream`, plus which hand-backs you have already dealt with */
+  update(payload, seenNow) {
+    rows = payload.rows || []; staleFor = 0;
+    if (payload.projects) projects = payload.projects;
+    if (seenNow) seen = seenNow;
+    for (const id of Object.keys(queued)) {  // a held reply goes out when the turn it was written for ends, and only then
+      const q = queued[id], r = rows.find((x) => x.id === id);
+      if (!r) { if ((gone[id] = (gone[id] || 0) + 1) > 3) unqueue(id, 'that agent is no longer running'); continue; }
+      delete gone[id];
+      if ((r.sid || '') !== (q.sid || '')) unqueue(id, 'a different session is running there now');
+      else if ((r.state === 'working' && r.since !== q.since) || r.prompt !== q.prompt) unqueue(id, 'it was given another prompt first');
+      else if (r.state === 'yours' && /interrupted/.test(r.note)) unqueue(id, 'you interrupted that turn');
+      else if (r.state === 'yours' && !pending) deliver(r, q.text, true, true);
+    }
+    if ((mode === 'palette' || mode === 'board') && open && !slots.length) renumber();
+    draw();
+  },
+  stale(seconds) { staleFor = seconds; draw(); },
+  /* each time the panel appears or changes shape */
+  show(m, opts = {}) {
+    const was = mode;
+    mode = m; pinned = !!opts.pinned; open = true;
+    if (opts.commands) commands = { ...commands, ...opts.commands };
+    if (m !== 'palette' && m !== 'board') { creating = false; $('q').value = ''; }
+    for (const c of ['dock', 'pill', 'palette', 'board']) $('deck').classList.toggle(c, m === c);
+    if (m === 'board') { peek = tab === 'term'; if (opts.looked != null) looked = opts.looked; }
+    draw.h = draw.w = 0;
+    $('pinBtn').firstChild.textContent = pinned ? 'Unpin' : 'Pin';
+    $('hot').textContent = opts.hotkey || '';
+    if (m === 'palette' || m === 'board') {
+      if (was !== m || !opts.keep) $('q').value = '';
+      const fresh = layout().need.find(isNew);
+      if (opts.select && rows.some((r) => r.id === opts.select)) sel = opts.select; else if (fresh) sel = fresh.id;
+    }
+    if (m === 'palette' || m === 'board') { reconcile(); renumber(); }
+    draw();
+    if (m === 'palette' || m === 'board') { grow(); $('q').focus(); wantScreen(); wantChanges(); wantTalk(); }
+    if (m === 'board') for (const b of $('tabs').children) b.setAttribute('aria-selected', b.dataset.tab === tab);
+    $('list').querySelector('.sel')?.scrollIntoView({ block: 'nearest' });
+  },
+  hidden() { open = false; },
+  /* the app's answer to a send */
+  sent(id, ok, reason, req) {
+    const p = pending;
+    if (!p || p.req !== req) return;  // an answer to some other request: not ours to act on
+    pending = null;
+    const row = rows.find((r) => r.id === id);
+    if (p.fromQueue) {  // nobody was watching this one: say what happened, and never move the selection
+      if (ok) { delete queued[id]; keep(); if (composing === id) { $('r').value = ''; grow(); } markSeen(row); toast('Queued reply delivered to ' + p.title); }
+      else unqueue(id, (reason || 'not delivered').replace(/^Not sent: /, ''));
+      return draw();
+    }
+    if (!ok) { failed = { id, reason: reason || 'Not delivered' }; toast('Not sent', true); return draw(); }  // the draft is still in the box
+    failed = {};
+    delete drafts[id]; keep();
+    if (composing === id) { $('r').value = ''; grow(); }
+    markSeen(row);
+    toast((p.submit ? 'Delivered to ' : 'Pasted into ') + p.title);
+    const next = p.submit && sel === id && layout().flat.find((r) => isNew(r) && r.id !== id);  // on to the next one waiting
+    if (next) { $('q').focus(); return select(next.id); }
+    draw();
+  },
+  restore(kept) { drafts = { ...kept, ...drafts }; draw(); },
+  changes(id, info) { changed = { id, at: Date.now(), info }; const r = current(); if (r && r.id === id) drawChanges(r); },
+  talk(id, turns) { talks[id] = { sig: talks[id] ? talks[id].want : '', asked: 0, turns }; const r = current(); if (r && r.id === id) drawTalk(r); },
+  diff(id, file, text) { if (diffOf.id === id && diffOf.file === file) { diffOf.text = text; const r = current(); if (r && r.id === id) drawDiff(r); } },
+  events(list) { events = list || []; drawFeed(); },
+  screen(id, text) { screens = { [id]: text }; const r = current(); if (r && r.id === id) drawScreen(r); },
+  failed(text) { toast(text, true); },
+  set patience(ms) { patience = ms; },
+  /* the app's answer to a launch */
+  launched(ok, text, rev) {
+    if (rev !== launching) return;  // an answer to an earlier attempt
+    launching = 0; $('nGo').disabled = false;
+    if (!ok) { $('nWhy').textContent = text || 'Could not start it.'; return; }
+    if ($('nPrompt').value === start.sent) { $('nPrompt').value = ''; openNew(false); }  // words typed since then are for the next one
+    toast(text || 'Started');
+  },
+  press,
+};
+drawKeys();
+post({ cmd: 'ready' });
+</script>
+</body>
+</html>

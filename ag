@@ -1,0 +1,742 @@
+#!/opt/homebrew/bin/python3
+"""ag: one glance at every Claude Code and Codex agent running on this Mac.
+
+  ag            who needs you, who is working, on what, for how long
+  ag watch      the same, live (ctrl-c to quit)
+  ag peek [N]   recap for tab N, or for every agent that needs you: your last ask, its last answer
+  ag next       jump to the next agent that needs you (WezTerm)
+  ag go N       jump to tab N (WezTerm); with several windows tabs are named window.tab, e.g. 2.3
+  ag json [--notify] [PANES]   per-pane state for the WezTerm tab bar; --notify raises a macOS notification
+                on hand-back; PANES is WezTerm's pane list as JSON (default: ask `wezterm cli list`)
+  ag stream     the full state as one JSON line every 2 s (what the Agentdeck app reads)
+  ag send ID    paste stdin into that agent's terminal and press Return. Refuses unless that agent is waiting for a
+                prompt, still owns its terminal, and its input line is visibly empty.
+                (ID as in `ag stream`, e.g. claude-1234; --no-submit pastes without Return; --sid S also
+                requires that agent to still be session S)
+  ag talk ID    the last few exchanges with that agent, as JSON (the dashboard's conversation view)
+  ag check      self-test
+
+BLOCKED = stopped mid-task on a dialog or question. your turn = finished, waiting for your next prompt.
+"""
+# Absolute interpreter on purpose: WezTerm's GUI has no Homebrew on PATH, and /usr/bin/python3 is the
+# Xcode shim, which stops working whenever the Xcode license is unaccepted.
+import calendar, glob, json, os, re, shutil, subprocess, sys, tempfile, time
+
+HOME = os.path.expanduser('~')
+SEEN = os.path.join(HOME, '.cache', 'ag-seen.json')
+RANK = {'blocked': 0, 'yours': 1, 'working': 2, 'done': 3}
+LOOK = {'blocked': ('1;31', '● BLOCKED'), 'yours': ('33', '◆ your turn'), 'working': ('32', '⠿ working'),
+        'done': ('34', '✓ finished')}
+TURN = re.compile(rb'"type":"event_msg","payload":\{"type":"(task_started|task_complete|turn_aborted)"')
+MENU = re.compile(r'^[\s│|]*[›»❯]\s*\d+\.\s')  # "› 1. Trust and continue" / "❯ 1. Yes": how both CLIs draw a dialog
+PROMPT = {'claude': ('❯',), 'codex': ('›', '»')}  # the mark each CLI puts in front of its input line (Codex: » in full-access mode)
+ESC = re.compile(r'\x1b\[([0-9;:]*)m|\x1b\(B|\x1b\[[0-9;]*K')
+NOTIFY = 'on run a\ndisplay notification (item 1 of a) with title (item 2 of a)%s\nend run'
+
+
+def sh(*cmd, timeout=5):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, errors='replace', timeout=timeout).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return ''
+
+
+def load(line):
+    try:
+        return json.loads(line)
+    except ValueError:
+        return {}
+
+
+def tail(path, size=4 << 20):
+    """Lines from the last `size` bytes, newest first. Transcripts reach hundreds of MB; never read one whole."""
+    try:
+        with open(path, 'rb') as f:
+            end = f.seek(0, 2)
+            f.seek(max(0, end - size))
+            lines = f.read().split(b'\n')
+    except OSError:
+        return []
+    if end > size:
+        lines = lines[1:]  # first line is cut mid-way
+    return [l for l in reversed(lines) if l]
+
+
+def epoch(iso):
+    return calendar.timegm(time.strptime(iso[:19], '%Y-%m-%dT%H:%M:%S'))
+
+
+def ago(since, now=None):
+    if not since:
+        return '?'
+    s = max(0, int((now or time.time()) - since))
+    for unit, n in (('d', 86400), ('h', 3600), ('m', 60)):
+        if s >= n:
+            return '%d%s' % (s // n, unit)
+    return '%ds' % s
+
+
+def headline(text):
+    return text.strip().split('\n')[0]
+
+
+def clean(title):
+    """'⠸ Restart Docker | voidreach' -> 'Restart Docker' (drop the spinner and the project suffix)."""
+    return re.sub(r'^\W+|^Action Required \| |\s*\|[^|]*$', '', re.sub(r'^\W+', '', title))
+
+
+def processes():
+    """pid -> (ppid, tty, command)"""
+    out = {}
+    for l in sh('ps', '-axo', 'pid=,ppid=,tty=,command=').splitlines():
+        p = l.split(None, 3)
+        if len(p) == 4:
+            out[int(p[0])] = (int(p[1]), p[2], p[3])
+    return out
+
+
+def wezterm(procs):
+    """The CLI next to the running GUI; WezTerm is not on PATH here and its app path moves between launches."""
+    for _, _, cmd in procs.values():
+        m = re.match(r'(/\S*)/wezterm-gui', cmd)
+        if m:
+            return m.group(1) + '/wezterm'
+    return 'wezterm'
+
+
+def panes(listed):
+    """tty -> pane, plus 'tab': the 1-based position shown in the tab bar."""
+    listed = [p for p in listed if 'tty_name' in p]
+    order = {}
+    for p in listed:
+        tabs = order.setdefault(p['window_id'], {})
+        p['tab'] = tabs.setdefault(p['tab_id'], len(tabs) + 1)
+    for p in listed:  # tab numbers restart in every window, so with more than one a tab is named "window.tab"
+        p['window'] = sorted(order).index(p['window_id']) + 1 if len(order) > 1 else None
+        p['where'] = '%d.%d' % (p['window'], p['tab']) if p['window'] else str(p['tab'])
+    return {p['tty_name'].replace('/dev/', ''): p for p in listed}
+
+
+_MEMO = {}
+_ASKING = {}  # Codex pid -> when its tab title first said "Action Required"
+
+
+def memo(key, token, fn):
+    """fn(), unless `token` (a file signature or a time bucket) matches the last call. `ag stream` runs every 2 s."""
+    hit = _MEMO.get(key)
+    if not hit or hit[0] != token:
+        hit = _MEMO[key] = (token, fn())
+    return hit[1]
+
+
+def sig(path):
+    try:
+        st = os.stat(path)
+        return st.st_size, st.st_mtime_ns
+    except OSError:
+        return None
+
+
+def group(cwd):
+    """The project an agent belongs to: its folder under ~/personal, with worktrees (harvestcrown-wt/UX-8) folded in."""
+    if not cwd:
+        return '?'
+    rel = os.path.relpath(cwd, HOME + '/personal')
+    name = os.path.basename(cwd.rstrip('/')) if rel == '.' or rel.startswith('..') else rel.split('/')[0]
+    return re.sub(r'-wt$', '', name) or '?'
+
+
+def branch(cwd):
+    """The git branch checked out where an agent is working ('' outside a repo, or if anything about .git is odd).
+    Reads .git by hand: cheap, lock-free, and bounded, since these files belong to whatever repo an agent is in."""
+    def small(path):
+        if not os.path.isfile(path) or os.path.getsize(path) > 4096:
+            raise OSError(path)
+        with open(path, errors='replace') as f:
+            return f.read(4096)
+
+    def read():
+        d = cwd
+        for _ in range(40):
+            if not d or d == '/':
+                break
+            git = os.path.join(d, '.git')
+            try:
+                if os.path.isfile(git):  # a worktree: .git is a pointer file
+                    git = os.path.join(d, small(git).split('gitdir:', 1)[1].strip())
+                head = small(os.path.join(git, 'HEAD')).strip()
+                return head.split('refs/heads/', 1)[1][:60] if 'refs/heads/' in head else head[:7]
+            except (OSError, IndexError, ValueError):
+                d = os.path.dirname(d)
+        return ''
+    return memo(('branch', cwd), int(time.time() // 15), read)
+
+
+def projects():
+    """Folders under ~/personal, most recently touched first: where a new agent can be started."""
+    def read():
+        root = HOME + '/personal'
+        try:
+            dirs = [e for e in os.scandir(root) if e.is_dir() and not e.name.startswith('.')]
+        except OSError:
+            return []
+        dirs.sort(key=lambda e: e.stat().st_mtime, reverse=True)
+        return [{'name': e.name, 'path': e.path} for e in dirs[:60]]
+    return memo('projects', int(time.time() // 60), read)
+
+
+def last_asks(path, key):
+    """session id -> the newest history entry: the last thing you typed to that session."""
+    def parse():
+        out = {}
+        for line in tail(path):
+            e = load(line)
+            out.setdefault(e.get(key), e)
+        return out
+    return memo(('asks', path), sig(path), parse)
+
+
+def claude_log(path):
+    """(title, last prompt, last message, tool it is running, working dir, interrupted?) from the tail of a Claude transcript."""
+    title = prompt = said = tool = cwd = ''
+    stopped = seen_reply = False
+    for line in tail(path):
+        if not seen_reply and b'[Request interrupted by user' in line:
+            stopped = True  # the newest thing in the log is you pressing Esc
+        if not title and b'"type":"ai-title"' in line:
+            title = load(line).get('aiTitle', '')
+        elif not prompt and b'"type":"last-prompt"' in line:
+            prompt = load(line).get('lastPrompt', '')
+        elif not said and b'"type":"assistant"' in line:
+            e = load(line)
+            if e.get('type') == 'assistant' and not e.get('isSidechain'):
+                blocks = e['message']['content']
+                seen_reply = True
+                cwd = cwd or e.get('cwd', '')  # where it is working now, not where it was launched
+                said = '\n'.join(b.get('text', '') for b in blocks if b.get('type') == 'text')
+                # long tool-only stretches have no narration in reach; the tool it is running is the stage
+                tool = tool or next(('→ %s: %s' % (b['name'], b['input'].get('description') or b['input'].get('file_path') or '')
+                                     for b in blocks if b.get('type') == 'tool_use'), '')
+        if title and prompt and said:
+            break
+    return title, prompt, said, tool, cwd, stopped
+
+
+def claude_rows(procs):
+    # ponytail: reads Claude Code's own session files (status busy|shell|idle|waiting). If that format moves,
+    # `claude agents --json` is the supported source, but it has no statusUpdatedAt or waitingFor.
+    # Background jobs (`claude --bg`) have no pid file and are not listed.
+    asks = last_asks(HOME + '/.claude/history.jsonl', 'sessionId')
+    for path in glob.glob(HOME + '/.claude/sessions/*.json'):
+        try:
+            with open(path) as f:
+                s = json.load(f)
+        except (OSError, ValueError):
+            continue
+        proc = procs.get(s.get('pid'))
+        if not proc or 'claude' not in proc[2]:
+            continue  # stale file from a dead session
+        try:
+            yield claude_row(s, proc, asks)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            pass  # its files were caught mid-write; the next tick reads them whole
+
+
+def claude_row(s, proc, asks):
+        logs = glob.glob('%s/.claude/projects/*/%s.jsonl' % (HOME, s.get('sessionId')))
+        title, prompt, said, tool, cwd, stopped = memo(('claude', logs[0]), sig(logs[0]), lambda: claude_log(logs[0])) if logs else ('',) * 5 + (False,)
+        moved = os.stat(logs[0]).st_mtime if logs else None
+        status = s.get('status')
+        state = {'waiting': 'blocked', 'idle': 'yours', 'shell': 'yours'}.get(status, 'working')  # unknown is never "ready"
+        # "shell" = turn over with a background shell alive: a watcher it will wake on, or just a dev server. Can't tell
+        # which, so it counts as your turn and says why.
+        note = s.get('waitingFor') or ('you interrupted it' if stopped and state == 'yours' else 'background shell running' if status == 'shell' else '')
+        ask = asks.get(s.get('sessionId'), {})  # untruncated, unlike the transcript's last-prompt; pastes are stored beside it
+        typed = re.sub(r'\[Pasted text #(\d+)[^\]]*\]',
+                       lambda m: ask.get('pastedContents', {}).get(m.group(1), {}).get('content', m.group(0)), ask.get('display', ''))
+        return dict(kind='claude', pid=s['pid'], tty=proc[1], cwd=cwd or s.get('cwd', ''), state=state,
+                   since=s.get('statusUpdatedAt', s.get('startedAt', 0)) / 1000, title=title or s.get('name', ''),
+                   prompt=typed or prompt, said=said or tool, doing=tool if state == 'working' else '', note=note, moved=moved,
+                   sid=s.get('sessionId') or '', asked=(ask.get('timestamp') or 0) / 1000 or None)
+
+
+def codex_files(pids):
+    """pid -> {'cwd': ..., 'logs': [rollout files it holds open]}; lsof is the slow part, so at most every 10 s."""
+    def ask():
+        opened, pid, fd = {}, None, ''
+        for l in filter(None, sh('lsof', '-c', 'codex', '-Fn').splitlines()):
+            if l[0] == 'p':
+                pid = int(l[1:])
+            elif l[0] == 'f':
+                fd = l[1:]
+            elif fd == 'cwd':
+                opened.setdefault(pid, {})['cwd'] = l[1:]
+            elif '/sessions/' in l and l.endswith('.jsonl'):
+                opened.setdefault(pid, {}).setdefault('logs', []).append(l[1:])
+        return opened or _MEMO.get('lsof', (0, {}))[1]
+    return memo('lsof', (pids, int(time.time() // 10)), ask)
+
+
+def codex_log(path):
+    """(state, since, last message, note) from the tail of a Codex rollout."""
+    state, since, said, note, lines = 'working', None, '', '', tail(path)
+    # A dialog (folder trust, command approval) leaves no trace here; snapshot() reads the screen of a silent Codex for that.
+    for line in lines:
+        m = TURN.search(line[:200])
+        e = load(line) if m else {}
+        if e.get('timestamp'):  # skips a line Codex is still writing
+            since = epoch(e['timestamp'])
+            if m.group(1) != b'task_started':
+                state, said = 'yours', e.get('payload', {}).get('last_agent_message') or ''
+                note = 'you interrupted it' if m.group(1) == b'turn_aborted' else ''
+            break
+    if not said:
+        for line in lines:
+            if b'"role":"assistant"' in line[:300]:
+                said = '\n'.join(c.get('text', '') for c in load(line).get('payload', {}).get('content', []))
+                break
+    return state, since, said, note
+
+
+def codex_rows(procs):
+    mine = {pid: p for pid, p in procs.items() if re.match(r'(\S*/)?codex( |$)', p[2])}
+    opened = codex_files(frozenset(mine))
+    for pid, proc in mine.items():
+        try:
+            row = codex_row(pid, proc, opened.get(pid, {}), procs)
+            if row:
+                yield row
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            pass
+
+
+def codex_row(pid, proc, o, procs):
+        ppid, tty, cmd = proc
+        headless = tty == '??' or bool(re.search(r'\sexec(\s|$)', cmd))  # `codex exec` is headless even inside a terminal
+        row = dict(kind='exec' if headless else 'codex', pid=pid, tty=tty, cwd=o.get('cwd', ''), state='yours',
+                   since=None, title='', prompt='', said='', note='')
+        if not o.get('logs'):
+            return None if headless else row  # a TUI with no thread yet: nothing to read, but it is waiting on you
+        main = min(o['logs'])  # subagent threads hold their own, later-dated rollouts
+        home, thread = main.split('/sessions/')[0], main[-42:-6]
+        ask = last_asks(home + '/history.jsonl', 'session_id').get(thread, {})
+        state, since, said, note = memo(('codex', main), sig(main), lambda: codex_log(main))
+        row.update(state=state, said=said, note=note, log=main, sid=thread, moved=os.stat(main).st_mtime, prompt=ask.get('text', ''), subs=len(o['logs']) - 1,
+                   asked=ask.get('ts'),
+                   since=since or ask.get('ts') or os.stat(main).st_birthtime)
+        if headless:
+            # ponytail: only the run_codex.sh runner is named; any other wrapper shows as a plain "codex exec"
+            m = re.search(r'run_codex\.sh (\S+) \S+ ?(.*)', procs.get(ppid, (0, '', ''))[2])
+            row['title'] = '%s · %s' % m.groups() if m else 'codex exec'
+        return row
+
+
+def dialog(screen):
+    """The question a terminal is stuck on, if the bottom of its screen is a numbered menu with a cursor on it; else ''."""
+    lines = screen.rstrip().split('\n')[-25:]
+    if not any(MENU.match(l) for l in lines):
+        return ''
+    asked = next((l for l in lines if '?' in l), '')
+    return asked.strip().split('?')[0].lstrip('│ ') + '?' if asked else 'a dialog'
+
+
+def pane_list(procs):
+    """WezTerm's panes, re-asked at most every 10 s. A slow or failed answer keeps the previous list, and an empty one
+    is never remembered: the next tick asks again instead of showing every agent as tab-less for ten seconds."""
+    def ask():
+        return load(sh(wezterm(procs), 'cli', 'list', '--format', 'json', timeout=3)) or _MEMO.get('panes', (0, []))[1]
+    listed = memo('panes', int(time.time() // 10), ask)
+    if not listed:
+        _MEMO.pop('panes', None)
+    return listed
+
+
+def snapshot(listed=None):
+    procs = processes()
+    by_tty = panes(listed or pane_list(procs))  # WezTerm's Lua passes its own list, so that poll never calls back into WezTerm
+    rows = list(claude_rows(procs)) + list(codex_rows(procs))
+    for r in rows:
+        p = by_tty.get(r['tty'], {})
+        r.update(tab=p.get('tab'), pane=p.get('pane_id'), tabid=p.get('tab_id'), win=p.get('window_id'), window=p.get('window'),
+                 where=p.get('where'), proj=group(r['cwd']), branch=branch(r['cwd']),
+                 title=r['title'] or clean(p.get('title', '')) or headline(r['prompt']) or 'codex')
+        if r['kind'] == 'codex' and re.match(r'\W*Action Required \| ', p.get('title', '')):  # Codex's own flag: a question or approval is waiting
+            r.update(state='blocked', note='a question for you', since=_ASKING.setdefault(r['pid'], time.time()))
+        else:
+            _ASKING.pop(r['pid'], None)
+        quiet = 'log' not in r or (r['state'] == 'working' and time.time() - os.stat(r['log']).st_mtime > 10)
+        if r['kind'] == 'codex' and r['pane'] is not None and quiet:
+            pane = str(r['pane'])
+            asked = memo(('screen', pane), int(time.time() // 10), lambda: dialog(sh(wezterm(procs), 'cli', 'get-text', '--pane-id', pane, timeout=2)))
+            if asked:  # each new dialog gets its own "since", so marking one as seen never hides the next
+                r.update(state='blocked', note=asked, since=os.stat(r['log']).st_mtime if 'log' in r else memo(('asked', pane, asked), 0, time.time))
+    rows.sort(key=lambda r: (RANK[r['state']], r['kind'] == 'exec', r['since'] or 0))
+    return rows
+
+
+def as_rows(rows):
+    """What the Agentdeck app needs per agent."""
+    keys = ('kind', 'pid', 'state', 'since', 'title', 'proj', 'tab', 'pane', 'tabid', 'win', 'window', 'where', 'branch', 'prompt', 'note', 'cwd')
+    return [dict({k: r[k] for k in keys}, id=ident(r), said=r['said'].strip()[:4000], cut=len(r['said'].strip()) > 4000,
+                 doing=r.get('doing', ''), subs=r.get('subs', 0), moved=r.get('moved'), sid=r.get('sid', ''), asked=r.get('asked')) for r in rows]
+
+
+def ident(r):
+    return '%s-%s' % (r['kind'], r['pid'])
+
+
+def stream():
+    """One JSON line every 2 s. A headless run that ends stays listed as finished for half an hour, with what it last said."""
+    live, done = {}, {}
+    while True:
+        rows = snapshot()
+        now = {ident(r): r for r in rows}
+        for i, r in live.items():
+            if i not in now and not alive(r['pid']):
+                state, _, said, _ = codex_log(r['log'])
+                done[i] = dict(r, state='done', since=time.time(), said=said or r['said'],
+                               note='' if state == 'yours' else 'ended without a final message')
+        live = dict({i: r for i, r in live.items() if alive(r['pid'])}, **{i: r for i, r in now.items() if r['kind'] == 'exec' and r.get('log')})
+        done = {i: r for i, r in done.items() if time.time() - r['since'] < 1800 and i not in now}
+        print(json.dumps({'at': time.time(), 'summary': summary(rows), 'rows': as_rows(rows + list(done.values())),
+                          'projects': projects()}), flush=True)
+        time.sleep(2)
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def owns_terminal(pid):
+    """Is this process still running and in the foreground of its terminal (so keystrokes go to it, not to a shell)?"""
+    f = sh('ps', '-o', 'pgid=,tpgid=', '-p', str(pid)).split()
+    return len(f) == 2 and f[0] == f[1]
+
+
+def shown(line):
+    """What a person sees on a terminal line: no escapes, no spaces, none of Codex's idle shimmer."""
+    return ''.join(ch for ch in ESC.sub('', line) if not (ch.isspace() or ch == '\xa0' or '\u2800' <= ch <= '\u28ff'))
+
+
+def prompt_empty(kind, screen):
+    """True only if the bottom of this terminal (captured with escapes) shows the agent's input line holding nothing
+    but its dimmed placeholder. Text someone already typed, a dialog, or no visible prompt at all gives False."""
+    lines = screen.rstrip().split('\n')[-14:]
+    for n in range(len(lines) - 1, -1, -1):
+        line = lines[n]
+        if not ESC.sub('', line).lstrip().startswith(PROMPT[kind]):
+            continue
+        if n + 1 < len(lines) and shown(lines[n + 1]).strip('─'):  # a second line of typed text under the mark
+            return False
+        dim, marked, i = False, False, 0
+        while i < len(line):
+            m = ESC.match(line, i)
+            if m:
+                codes, i = (m.group(1) or '0').split(';') if m.group(0).endswith('m') else [], m.end()
+                while codes:
+                    c = codes.pop(0).split(':')[0]
+                    if c in ('38', '48') and codes:  # a colour in the old ;-separated form: skip its arguments
+                        del codes[:4 if codes[0] == '2' else 2]
+                    elif c in ('', '0', '22'):
+                        dim = False
+                    elif c == '2':
+                        dim = True
+                continue
+            ch, i = line[i], i + 1
+            if not marked:
+                marked = ch in PROMPT[kind]
+            elif not (ch.isspace() or ch == '\xa0' or '\u2800' <= ch <= '\u28ff' or dim):  # braille = Codex's idle shimmer
+                return False
+        return marked
+    return False
+
+
+def refusal(row, screen, foreground):
+    """Why a reply must not be typed into this agent's terminal right now; '' if it is safe."""
+    if not row:
+        return 'that agent is no longer running'
+    if row['kind'] == 'exec' or row['pane'] is None:
+        return 'that agent has no terminal to type into'
+    if row['state'] != 'yours':
+        return 'it is %s, not waiting for a prompt; drop in instead' % LOOK[row['state']][1].split(' ', 1)[1].lower()
+    if not foreground:
+        return 'the agent is no longer in control of that terminal'
+    if screen is None:
+        return 'could not read that terminal, so not typing into it blind'
+    if not prompt_empty(row['kind'], screen):
+        return 'its prompt is not empty (a dialog, or text already typed there); drop in instead'
+    return ''
+
+
+def send(who, text, submit, sid=''):
+    """Paste `text` into an agent's terminal and press Return, but only on proof that its empty prompt is what will
+    receive it: state, foreground process and screen are all read after the text is in hand, just before typing."""
+    if not text.strip() or len(text) > 20000:
+        sys.exit('nothing to send' if not text.strip() else 'too long to paste safely (over 20,000 characters)')
+    row = next((r for r in snapshot() if ident(r) == who), None)
+    if row and sid and row.get('sid', '') != sid:
+        sys.exit('that is a different session now; nothing was sent')
+    wez = wezterm(processes())
+    target = ['--pane-id', str(row['pane'])] if row and row['pane'] is not None else []
+
+    def wezcli(*args, **kw):
+        try:
+            return subprocess.run([wez, 'cli'] + list(args) + target, capture_output=True, text=True, timeout=5, check=True, **kw).stdout
+        except (OSError, subprocess.SubprocessError):
+            return None
+
+    why = refusal(row, wezcli('get-text', '--escapes') if target else None, bool(row) and owns_terminal(row['pid']))
+    if why:
+        sys.exit(why)
+    if wezcli('send-text', input=text) is None:  # as a paste, so a multi-line reply arrives as one message
+        sys.exit('WezTerm did not accept the text; nothing was typed')
+    if not submit:
+        return
+    time.sleep(0.25)
+    if not owns_terminal(row['pid']) or wezcli('send-text', '--no-paste', input='\r') is None:
+        sys.exit('pasted but NOT submitted: drop in and check its prompt before sending again')
+
+
+def summary(rows):
+    need = sum(r['state'] in ('blocked', 'yours') for r in rows)
+    return '%d need you · %d working' % (need, len(rows) - need) if rows else ''
+
+
+def titled(r):
+    return r['title'] + (' (+%d subagents)' % r['subs'] if r.get('subs') else '')
+
+
+def table(rows, color):
+    width = shutil.get_terminal_size().columns if color else 10 ** 6  # piped output is not cut
+    out = [summary(rows) or 'no agents running', '', 'TAB  STATE        FOR   AGENT   PROJECT         WHAT']
+    for r in rows:
+        code, label = LOOK[r['state']]
+        detail = ' · '.join(filter(None, (r['note'], headline(r['said']))))
+        head = '%-3s  %-11s' % (r['where'] or '-', label)
+        rest = '  %-4s  %-6s  %-14s  %s' % (ago(r['since']), r['kind'], r['proj'][:14],
+                                           titled(r) + (' — ' + detail if detail else ''))
+        out.append(('\033[%sm%s\033[0m' % (code, head) if color else head) + rest[:max(0, width - len(head))])
+    return '\n'.join(out)
+
+
+def peek(rows, tab):
+    for r in rows:
+        if r['where'] == tab if tab else r['state'] in ('blocked', 'yours'):
+            print('\n── tab %s · %s · %s · %s %s · %s' % (r['where'] or '-', r['kind'], r['proj'], LOOK[r['state']][1],
+                                                        ago(r['since']), titled(r)))
+            if r['note']:
+                print('waiting on: ' + r['note'])
+            print('you asked:  ' + ' '.join(r['prompt'].split())[:400])
+            said = r['said'].strip()  # replies lead with the outcome, so keep the start
+            print('it said:\n  ' + (said[:1500] + (' …' if len(said) > 1500 else '')).replace('\n', '\n  '))
+
+
+def as_json(rows):
+    return json.dumps({'summary': summary(rows), 'panes': {
+        str(r['pane']): {'state': r['state'], 'label': ('%s %s: %s' % (LOOK[r['state']][1][0], r['proj'], r['title']))[:34]}
+        for r in rows if r['pane'] is not None}})
+
+
+def notify(rows):
+    """macOS notification the moment an agent stops working. Text is passed as argv, never spliced into AppleScript."""
+    try:
+        with open(SEEN) as f:
+            seen = json.load(f)
+    except (OSError, ValueError):
+        seen = {}
+    now = {'%s-%s' % (r['kind'], r['pid']): r['state'] for r in rows}
+    for r in rows:
+        if r['state'] != 'working' and seen.get('%s-%s' % (r['kind'], r['pid'])) == 'working':
+            sh('osascript', '-e', NOTIFY % (' sound name "Glass"' if r['state'] == 'blocked' else ''),
+               r['note'] or headline(r['said']) or 'finished',
+               '%s · tab %s · %s: %s' % (LOOK[r['state']][1], r['where'] or '-', r['proj'], r['title']))
+    if now != seen:
+        os.makedirs(os.path.dirname(SEEN), exist_ok=True)
+        with open(SEEN, 'w') as f:
+            json.dump(now, f)
+
+
+def claude_talk(path, limit):
+    """The last few exchanges in a Claude transcript: what you asked, its final answer, how many tool calls in between."""
+    turns = []
+    for line in reversed(tail(path, 12 << 20)):  # oldest first; a deeper look than the feed takes, since this runs only on request
+        if b'"type":"user"' not in line and b'"type":"assistant"' not in line:
+            continue
+        e = load(line)
+        if e.get('isSidechain') or e.get('isMeta'):
+            continue
+        content = (e.get('message') or {}).get('content') or []
+        blocks = [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
+        text = content if isinstance(content, str) else '\n'.join(b.get('text', '') for b in blocks if b.get('type') == 'text')
+        if e.get('type') == 'user':
+            text = re.sub(r'<system-reminder>.*?</system-reminder>', '', text, flags=re.S).strip()
+            if text.startswith('[Request interrupted'):
+                if turns:
+                    turns[-1]['stopped'] = True
+            elif text and not text.startswith(('<local-command', '<command-', '<task-notification', '<bash-')):  # tool results and injected notes are not you
+                turns.append(dict(you=text[:6000], at=epoch(e['timestamp']) if e.get('timestamp') else None, said='', steps=0, ran=[], open=True))
+        elif e.get('type') == 'assistant' and turns:
+            t = turns[-1]
+            t['steps'] += sum(b.get('type') == 'tool_use' for b in blocks)
+            t['ran'] += [(b.get('input') or {}).get('description') or '' for b in blocks if b.get('type') == 'tool_use' and b.get('name') == 'Bash']
+            t['open'] = (e.get('message') or {}).get('stop_reason') != 'end_turn'  # still mid-work when the log moves on = not a final answer
+            if text.strip():
+                t['said'] = text.strip()[:8000]
+    for t in turns:
+        t['ran'] = [x for x in t['ran'] if x][-15:]
+    return turns[-limit:]
+
+
+def codex_talk(main, limit):
+    """The same for Codex: your prompts from its history file, each paired with the turn that answered it."""
+    home, thread = main.split('/sessions/')[0], main[-42:-6]
+    asks = [(e.get('ts') or 0, e.get('text', '')) for e in map(load, reversed(tail(home + '/history.jsonl'))) if e.get('session_id') == thread]
+    ends = []
+    for line in reversed(tail(main)):
+        m = TURN.search(line[:200])
+        e = load(line) if m and m.group(1) == b'task_complete' else {}
+        if e.get('timestamp'):
+            ends.append((epoch(e['timestamp']) + float('0' + e['timestamp'][19:].rstrip('Z') or 0), e.get('payload', {}).get('last_agent_message') or ''))
+    turns = []
+    for i, (ts, text) in enumerate(asks):
+        until = asks[i + 1][0] if i + 1 < len(asks) else float('inf')
+        # History times are whole seconds, so an answer in the same second as a prompt is taken to be the previous prompt's.
+        said = next((msg for t, msg in ends if ts + 1 <= t < until + 1), None)
+        turns.append(dict(you=text[:6000], at=ts, said=(said or '')[:8000], steps=0, ran=[], open=said is None))
+    return turns[-limit:]
+
+
+def talk(who, limit=8):
+    """`ag talk ID`: the recent conversation with one agent, as JSON, for the dashboard."""
+    row = next((r for r in snapshot([{}]) if ident(r) == who), None)  # no need to ask WezTerm about panes for this
+    turns = []
+    if row and row['kind'] == 'claude':
+        logs = glob.glob('%s/.claude/projects/*/%s.jsonl' % (HOME, row.get('sid')))
+        turns = claude_talk(logs[0], limit) if logs else []
+    elif row and row.get('log'):
+        turns = codex_talk(row['log'], limit)
+    print(json.dumps({'id': who, 'turns': turns}))
+
+
+def pick_next(rows, focused):
+    """The agent to visit next: cycles through those that need you, most urgent first."""
+    need = [r for r in rows if r['state'] in ('blocked', 'yours') and r['pane'] is not None]
+    ids = [r['pane'] for r in need]
+    if focused in ids:
+        return need[(ids.index(focused) + 1) % len(need)]
+    return need[0] if need else None
+
+
+def jump(row):
+    wez = wezterm(processes())
+    # The CLI can switch tabs but not raise a WezTerm window. A hook in ~/.wezterm.lua reads this file and brings the
+    # window showing that pane forward, which is what makes a jump into another window work.
+    os.makedirs(HOME + '/.cache', exist_ok=True)
+    with open(HOME + '/.cache/agentdeck-focus', 'w') as f:
+        f.write(str(row['pane']))
+    sh(wez, 'cli', 'activate-tab', '--tab-id', str(row['tabid']))
+    sh(wez, 'cli', 'activate-pane', '--pane-id', str(row['pane']))
+
+
+def check():
+    assert (ago(100, 130), ago(100, 100 + 125), ago(100, 100 + 7300), ago(None)) == ('30s', '2m', '2h', '?')
+    assert clean('⠸ Restart Docker | voidreach') == 'Restart Docker' and clean('◑ Ocean game') == 'Ocean game'
+    assert clean('[ . ] Action Required | Remake Saltline from scratch | saltline-remake-sol') == 'Remake Saltline from scratch'
+    assert epoch('2026-10-04T09:09:37.564Z') == 1791104977
+    ev = b'{"timestamp":"2026-10-04T09:09:37.564Z","ordinal":1,"type":"event_msg","payload":{"type":"%s"}}'
+    assert TURN.search(ev % b'task_complete').group(1) == b'task_complete' and not TURN.search(ev % b'token_count')
+    rows = [dict(state=s, pane=p) for s, p in (('blocked', 7), ('yours', 3), ('working', 5), ('yours', None))]
+    assert [pick_next(rows, f)['pane'] for f in (None, 5, 7, 3)] == [7, 7, 3, 7]
+    assert pick_next(rows[2:3], 5) is None
+    two = panes([dict(window_id=7, tab_id=1, tty_name='/dev/a'), dict(window_id=7, tab_id=2, tty_name='/dev/b'), dict(window_id=9, tab_id=5, tty_name='/dev/c')])
+    assert [two[t]['where'] for t in 'abc'] == ['1.1', '1.2', '2.1'] and panes([dict(window_id=7, tab_id=4, tty_name='/dev/a')])['a']['where'] == '1'
+    assert branch(os.path.dirname(os.path.realpath(__file__))) == '' or True  # outside a repo: no branch, and no exception
+    assert dialog('  Trust this folder? Codex can read files.\n› 1. Trust and continue\n  2. Quit\n') == 'Trust this folder?'
+    assert dialog('│ Do you want to proceed?\n│ ❯ 1. Yes\n│   2. No\n') == dialog(' Do you want to proceed?\n ❯ 1. Yes\n   2. No') == 'Do you want to proceed?'
+    assert dialog('› Ask Codex to do anything\n  ? for shortcuts') == '' and dialog('❯ fix the tests\n') == ''
+    e = '\x1b'
+    claude_empty = e + '[39m❯\xa0' + e + '(B' + e + '[0;2mTry "how does <filepath> work?"\n' + e + '[37m────\n  ⏸ manual mode on'
+    claude_typed = e + '[39m❯\xa0half typed draft\n' + e + '[37m────\n  ⏸ manual mode on'
+    claude_menu = ' Do you want to proceed?\n ❯ 1. Yes\n   2. No\n'
+    codex_empty = (e + '(B' + e + '[0;1m' + e + '[48:2::57:57:71m›' + e + '(B' + e + '[0m' + e + '[38:2::126:130:151m⠁' + e + '(B' + e +
+                   '[0;2m' + e + '[48:2::57:57:71mAsk Codex to do anything' + e + '(B' + e + '[0m' + e + '[38:2::74:75:91m⡀' + e + '[39m   ⠈\n   ⠄  ⠠\n  GPT-6 · ~/x\n  ? for shortcuts')
+    codex_typed = e + '(B' + e + '[0;1m' + e + '[48:2::57:57:71m›' + e + '(B' + e + '[0m' + e + '[48:2::57:57:71m half typed draft' + e + '[K\n' + e + '[K\n  GPT-6 · ~/x\n  ? for shortcuts'
+    assert [prompt_empty('claude', x) for x in (claude_empty, claude_typed, claude_menu, 'no prompt here', '❯ ')] == [True, False, False, False, True]
+    assert [prompt_empty('codex', x) for x in (codex_empty, codex_typed, '› 1. Trust and continue\n  2. Quit')] == [True, False, False]
+    codex_full = e + '(B' + e + '[0;1m' + e + '[38:2::188:141:253m»' + e + '(B' + e + '[0m ' + e + '(B' + e + '[0;2mAsk Codex to do anything' + e + '(B' + e + '[0m' + e + '[K\r\n' + e + '[K\r\n  ? for shortcuts\r'
+    assert prompt_empty('codex', codex_full) and not prompt_empty('codex', codex_full.replace('Ask Codex', e + '[0mAsk Codex'))
+    assert prompt_empty('claude', e + '[38;5;2m❯ ' + e + '[38;2;9;9;9mtyped in colour') is False  # ;2; inside a colour is not "dim"
+    assert not prompt_empty('claude', '❯ \n  delete the database\n────\n  ⏸ manual mode on') and prompt_empty('claude', '❯ \n────\n  ⏸ manual mode on')
+    assert not prompt_empty('codex', '› \n  deploy production\n\n  ? for shortcuts') and prompt_empty('codex', '› \n   ⠄  ⠠ \n  ? for shortcuts')
+    assert branch('/nonexistent/x') == '' and branch('') == ''
+    ok = dict(kind='claude', pane=3, state='yours', pid=1)
+    assert refusal(ok, claude_empty, True) == '' and refusal(dict(ok, kind='codex'), codex_empty, True) == ''
+    for row, screen, fg in ((None, claude_empty, True), (dict(ok, state='working'), claude_empty, True), (dict(ok, state='blocked'), claude_empty, True),
+                            (dict(ok, kind='exec'), claude_empty, True), (dict(ok, pane=None), claude_empty, True), (ok, claude_empty, False),
+                            (ok, None, True), (ok, claude_typed, True), (ok, claude_menu, True), (dict(ok, kind='codex'), codex_typed, True)):
+        assert refusal(row, screen, fg), (row, fg)
+    assert [group(HOME + p) for p in ('/personal/harvestcrown-wt/UX-8', '/personal/sea-game/src', '/personal', '/vivaa')] == \
+        ['harvestcrown', 'sea-game', 'personal', 'vivaa'] and group('') == '?'
+    calls = []
+    assert [memo('t', tok, lambda: calls.append(1) or len(calls)) for tok in (1, 1, 2)] == [1, 1, 2]
+    with tempfile.NamedTemporaryFile() as f:
+        f.write(b'aaaa\nbb\ncc\n')
+        f.flush()
+        assert tail(f.name) == [b'cc', b'bb', b'aaaa'] and tail(f.name, 8) == [b'cc', b'bb']
+    print('ok')
+
+
+def main(argv):
+    cmd = argv[0] if argv else 'ls'
+    if cmd == 'check':
+        return check()
+    if cmd == 'stream':
+        return stream()
+    if cmd == 'talk':
+        return talk(''.join(argv[1:2]))
+    if cmd == 'send':  # the text is read first, so the state check below is as late as it can be
+        sid = argv[argv.index('--sid') + 1] if '--sid' in argv[:-1] else ''
+        return send(''.join(argv[1:2]), sys.stdin.read(), '--no-submit' not in argv, sid)
+    if cmd not in ('ls', 'watch', 'peek', 'json', 'go', 'next'):
+        return print(__doc__)
+    rows = snapshot(load(argv[-1]) if cmd == 'json' else None)
+    if cmd == 'ls':
+        print(table(rows, sys.stdout.isatty()))
+    elif cmd == 'watch':
+        while True:
+            if not sh('pgrep', '-f', 'Agentdeck.app/Contents/MacOS/Agentdeck'):  # the app raises its own, clickable banners
+                notify(rows)
+            sys.stdout.write('\033[H\033[2J' + table(rows, True) + '\n')
+            sys.stdout.flush()
+            time.sleep(2)
+            rows = snapshot()
+    elif cmd == 'peek':
+        peek(rows, argv[1] if len(argv) > 1 else None)
+    elif cmd == 'json':
+        if '--notify' in argv:
+            notify(rows)
+        print(as_json(rows))
+    else:
+        if cmd == 'go':
+            row = next((r for r in rows if r['where'] == ''.join(argv[1:2])), None)
+        else:
+            clients = load(sh(wezterm(processes()), 'cli', 'list-clients', '--format', 'json')) or [{}]
+            row = pick_next(rows, clients[0].get('focused_pane_id'))
+        if not row:
+            sys.exit('no such tab' if cmd == 'go' else 'nothing needs you')
+        jump(row)
+
+
+if __name__ == '__main__':
+    try:
+        main(sys.argv[1:])
+    except KeyboardInterrupt:
+        pass
+    except BrokenPipeError:  # the reader went away (`ag stream | head`, or the app quit)
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())

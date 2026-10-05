@@ -1,0 +1,660 @@
+<!doctype html>
+<html lang="en" data-theme="luxury">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agentdeck: a floating deck over your agents</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/daisyui.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/themes.css">
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.2.4/dist/index.global.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  :where(.grid, .flex) > * { min-width: 0; }
+  :where(p, h1, h2, h3, h4, li, dd, figcaption, td, th) { overflow-wrap: anywhere; }
+  :where(svg) { max-width: 100%; height: auto; }
+  html { scroll-behavior: smooth; }
+  body { background: var(--color-base-100); color: var(--color-base-content); }
+  section { scroll-margin-top: 1.5rem; }
+  code.inline { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em;
+    background: var(--color-base-200); border: 1px solid color-mix(in oklab, var(--color-base-content) 14%, transparent);
+    border-radius: .35rem; padding: .08em .4em; white-space: nowrap; }
+  code.path { white-space: normal; overflow-wrap: anywhere; }
+
+  /* terminal captures */
+  .term pre { white-space: pre; font-size: .8rem; line-height: 1.55; }
+  .term .dim { opacity: .55; }
+  .s-blocked { color: var(--color-error); font-weight: 700; }
+  .s-yours { color: var(--color-warning); }
+  .s-working { color: var(--color-success); }
+
+  /* figures: hand-drawn SVG, coloured from the theme */
+  .figwrap { overflow-x: auto; }
+  .fig { display: block; width: 100%; min-width: 660px; color: var(--color-base-content); }
+  .fig text { fill: currentColor; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .fig .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .fig .t { font-size: 16px; font-weight: 700; }
+  .fig .sub { font-size: 13px; opacity: .75; }
+  .fig .lbl { font-size: 13px; }
+  .fig .box { fill: var(--color-base-200); stroke: currentColor; stroke-opacity: .28; stroke-width: 1.5; }
+  .fig .edge { fill: none; stroke: currentColor; stroke-opacity: .5; stroke-width: 2; }
+  .fig .c-ok { stroke: var(--color-success); stroke-opacity: 1; }
+  .fig .c-warn { stroke: var(--color-warning); stroke-opacity: 1; }
+  .fig .c-err { stroke: var(--color-error); stroke-opacity: 1; }
+  .fig .c-pri { stroke: var(--color-primary); stroke-opacity: 1; }
+  .fig .f-ok { fill: var(--color-success); } .fig .f-warn { fill: var(--color-warning); }
+  .fig .f-err { fill: var(--color-error); } .fig .f-pri { fill: var(--color-primary); }
+  .fig .f-dim { fill: currentColor; fill-opacity: .5; }
+  .fig text.f-ok, .fig text.f-warn, .fig text.f-err, .fig text.f-pri { fill-opacity: 1; }
+</style>
+</head>
+<body>
+<main class="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-10 lg:py-12 space-y-14">
+
+  <!-- ───────────── answer ───────────── -->
+  <header id="answer" class="space-y-6">
+    <p class="text-sm uppercase tracking-widest text-primary">The question: what did I build, and how do you use it?</p>
+    <h1 class="text-4xl sm:text-5xl font-bold leading-tight">
+      <span class="font-mono text-primary">Agentdeck</span> floats over your terminal, shows every agent and who is waiting on you, and lets you answer without switching tabs.
+    </h1>
+    <p class="text-lg max-w-3xl opacity-80">
+      Press <kbd class="kbd">⌥</kbd><kbd class="kbd">Space</kbd> from any app. It lists every Claude Code session, Codex session and headless Codex run,
+      drops you into any of them with one key, and can type your reply into an agent's prompt for you.
+      Underneath it is <code class="inline">ag</code>, the command-line tool from the first round, which still works on its own.
+    </p>
+    <nav aria-label="Sections">
+      <ul class="menu menu-horizontal flex-wrap gap-1 bg-base-200 rounded-box text-sm">
+        <li><a href="#deck">The deck</a></li>
+        <li><a href="#board">Dashboard</a></li>
+        <li><a href="#more">Pill, queue, new agent</a></li>
+        <li><a href="#reply">Replying</a></li>
+        <li><a href="#live">The ag table</a></li>
+        <li><a href="#states">Three states</a></li>
+        <li><a href="#loop">The loop</a></li>
+        <li><a href="#commands">Every command</a></li>
+        <li><a href="#sources">How it knows</a></li>
+        <li><a href="#checked">What was checked</a></li>
+        <li><a href="#tabs">Tab colouring</a></li>
+        <li><a href="#files">Files and undo</a></li>
+        <li><a href="#next">Left out</a></li>
+      </ul>
+    </nav>
+  </header>
+
+  <!-- ───────────── the deck ───────────── -->
+  <section id="deck" class="space-y-6">
+    <div class="space-y-2">
+      <h2 class="text-2xl font-bold">The deck</h2>
+      <p class="max-w-3xl opacity-80">Real captures from the app running on your machine today. Agents that want you are always on top, whatever project they belong to; working agents are grouped by project underneath; headless runs that finish stay listed for half an hour.</p>
+    </div>
+    <figure id="deck-open" class="rounded-box border border-base-content/10 bg-base-200 p-2">
+      <img src="deck-open.png" alt="The deck: a list of agents on the left, the selected agent's last request and reply on the right, a reply box at the bottom" class="rounded-box w-full">
+      <figcaption class="text-sm opacity-70 px-2 pt-2">Left: who needs you, then who is working. Right: what you last asked the selected agent and what it said, with a box to answer it.</figcaption>
+    </figure>
+
+    <div class="grid gap-6 lg:grid-cols-5 items-start">
+      <figure id="deck-strip" class="lg:col-span-2 rounded-box border border-base-content/10 bg-base-200 p-2">
+        <img src="deck-strip.png" alt="The pinned strip: a compact list of agents" class="rounded-box w-full max-w-xs mx-auto">
+        <figcaption class="text-sm opacity-70 px-2 pt-2"><strong>Pinned</strong> (<kbd class="kbd kbd-sm">⌘</kbd><kbd class="kbd kbd-sm">P</kbd>): a strip floats over every app and never takes the keyboard. <strong>Click a row and you are in that agent's tab.</strong> The small ⤢ on a row, the strip's header, or the hotkey open the full deck instead; <kbd class="kbd kbd-sm">esc</kbd> folds it back. The ▴ folds the strip into a pill.</figcaption>
+      </figure>
+      <div class="lg:col-span-3 overflow-x-auto rounded-box border border-base-content/10 bg-base-100">
+        <table class="table table-sm min-w-[30rem]">
+          <thead><tr><th>Key</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr id="k-hot"><td class="whitespace-nowrap"><kbd class="kbd kbd-sm">⌥</kbd><kbd class="kbd kbd-sm">Space</kbd></td><td>Open or close the deck, from any app. In WezTerm, <kbd class="kbd kbd-sm">Ctrl</kbd>+<kbd class="kbd kbd-sm">A</kbd> then <kbd class="kbd kbd-sm">Space</kbd> does the same.</td></tr>
+            <tr id="k-next"><td class="whitespace-nowrap"><kbd class="kbd kbd-sm">⌥</kbd><kbd class="kbd kbd-sm">⇧</kbd><kbd class="kbd kbd-sm">Space</kbd></td><td><strong>Go to whoever needs me.</strong> Drops you straight into the most urgent agent you have not dealt with, without opening anything. Press again for the next one.</td></tr>
+            <tr id="k-move"><td class="whitespace-nowrap"><kbd class="kbd kbd-sm">↑</kbd><kbd class="kbd kbd-sm">↓</kbd></td><td>Move through the agents. Typing filters the list.</td></tr>
+            <tr id="k-drop"><td class="whitespace-nowrap"><kbd class="kbd kbd-sm">↩</kbd></td><td><strong>Drop in</strong>: switch WezTerm to that agent's tab and bring it forward.</td></tr>
+            <tr id="k-tabn"><td class="whitespace-nowrap"><kbd class="kbd kbd-sm">⌘</kbd><kbd class="kbd kbd-sm">1–9</kbd></td><td>Drop into the agent carrying that number. Numbers are handed out when the deck opens and stay put until you close it, whatever window the tab is in.</td></tr>
+            <tr id="k-reply"><td class="whitespace-nowrap"><kbd class="kbd kbd-sm">⇥</kbd> then <kbd class="kbd kbd-sm">⌘</kbd><kbd class="kbd kbd-sm">↩</kbd></td><td>Go to the reply box, then send. If the agent is busy, the reply is queued for the end of its turn. Return alone adds a line.</td></tr>
+            <tr id="k-new"><td class="whitespace-nowrap"><kbd class="kbd kbd-sm">⌘</kbd><kbd class="kbd kbd-sm">N</kbd></td><td>Start a new agent in a new tab, in the background.</td></tr>
+            <tr id="k-paste"><td class="whitespace-nowrap"><kbd class="kbd kbd-sm">⇧</kbd><kbd class="kbd kbd-sm">⌘</kbd><kbd class="kbd kbd-sm">↩</kbd></td><td>Paste the reply into its prompt without submitting, and drop in to look at it.</td></tr>
+            <tr id="k-term"><td class="whitespace-nowrap"><kbd class="kbd kbd-sm">⌘</kbd><kbd class="kbd kbd-sm">T</kbd></td><td>Show what is on that agent's terminal right now, without going there.</td></tr>
+            <tr id="k-seen"><td class="whitespace-nowrap"><kbd class="kbd kbd-sm">⌘</kbd><kbd class="kbd kbd-sm">D</kbd></td><td>Mark as seen. It dims, sinks, and leaves the menu-bar count until that agent stops again. Dropping in or replying does this for you.</td></tr>
+            <tr id="k-pin"><td class="whitespace-nowrap"><kbd class="kbd kbd-sm">⌘</kbd><kbd class="kbd kbd-sm">P</kbd></td><td>Pin or unpin the strip.</td></tr>
+            <tr id="k-menu"><td class="whitespace-nowrap">Menu bar</td><td>The count (◆ yours, ● blocked) toggles the deck. Right-click it for pin, open at login and quit.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <figure id="deck-blocked" class="rounded-box border border-base-content/10 bg-base-200 p-2">
+      <img src="deck-blocked.png" alt="A blocked agent in the deck, with the permission dialog from its terminal shown inside the deck" class="rounded-box w-full">
+      <figcaption class="text-sm opacity-70 px-2 pt-2">A blocked agent shows its actual terminal, so you can read the question before deciding to go there. This is a real permission prompt from a test session; it is also the first time BLOCKED was seen live.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ───────────── the dashboard ───────────── -->
+  <section id="board" class="space-y-6">
+    <div class="space-y-2">
+      <h2 class="text-2xl font-bold">The dashboard: when you want the detail</h2>
+      <p class="max-w-3xl opacity-80">The pill and the deck are for glancing and switching. The dashboard is the same agents in an ordinary resizable window, for when you want to understand what one of them did before you answer it. Open it with <kbd class="kbd kbd-sm">⌘</kbd><kbd class="kbd kbd-sm">⇧</kbd><kbd class="kbd kbd-sm">D</kbd> from the deck, the Dashboard button, or the menu-bar menu; close it like any window and the pill comes back. Everything in the deck still works here: drop in, reply, queue, new agent.</p>
+    </div>
+    <figure id="board-talk" class="rounded-box border border-base-content/10 bg-base-200 p-2">
+      <img src="board-talk.png" alt="The dashboard's Conversation tab on a real agent" class="rounded-box w-full">
+      <figcaption class="text-sm opacity-70 px-2 pt-2"><strong>Conversation.</strong> The last few exchanges with the selected agent, read from its own log: what you asked, the answer it ended on, how many tool calls it took, and (for Claude) an expandable list of what it ran. A turn you cut short by writing again is marked as unfinished rather than shown as an answer. Enough to re-enter a thread without scrolling a terminal.</figcaption>
+    </figure>
+    <figure id="board-changes" class="rounded-box border border-base-content/10 bg-base-200 p-2">
+      <img src="board-changes.png" alt="The dashboard's Changes tab showing changed files and one file's diff" class="rounded-box w-full">
+      <figcaption class="text-sm opacity-70 px-2 pt-2"><strong>Changes.</strong> The commits made since you last prompted that agent, then the files it has left uncommitted. Click a file to read its diff. Git is only read when you look, never takes a lock an agent could trip over, and never runs anything a repository's own configuration names.</figcaption>
+    </figure>
+    <div class="grid gap-4 lg:grid-cols-2">
+      <div id="board-term" class="card card-border bg-base-200"><div class="card-body gap-2">
+        <h3 class="card-title text-base">Terminal</h3>
+        <p class="text-sm">The agent's actual screen, refreshed while you watch, without switching to its tab.</p>
+      </div></div>
+      <div id="board-feed" class="card card-border bg-base-200"><div class="card-body gap-2">
+        <h3 class="card-title text-base">What happened</h3>
+        <p class="text-sm">The column on the right is a running log: who handed back, who got blocked, which headless runs started and ended. Anything since you last opened the dashboard is bright; older entries are dimmed. Click one to select that agent. It starts empty and fills from now on.</p>
+      </div></div>
+    </div>
+  </section>
+
+  <!-- ───────────── added in the second round ───────────── -->
+  <section id="more" class="space-y-6">
+    <div class="space-y-2">
+      <h2 class="text-2xl font-bold">Added after your feedback</h2>
+      <p class="max-w-3xl opacity-80">You asked for a smaller footprint, a straight click-through, and several WezTerm windows. The rest comes from looking at what cmux, herdr and Conductor do well: a one-key jump to whatever is unread, typing ahead to a busy agent, starting an agent without leaving your work, and seeing what an agent changed.</p>
+    </div>
+    <div class="grid gap-4 lg:grid-cols-3">
+      <div id="more-pill" class="card card-border bg-base-200"><div class="card-body gap-3">
+        <h3 class="card-title text-base">Fold it to a pill</h3>
+        <img src="deck-pill.png" alt="The pill: just the counts" class="rounded-box" style="max-width: 9rem">
+        <p class="text-sm">The ▴ in the strip's header folds it down to its counts. Click the pill to unfold it. Its border turns yellow when something new is waiting and red when an agent is blocked. Drag the pill or the strip by its header to put it anywhere; it remembers.</p>
+      </div></div>
+      <div id="more-windows" class="card card-border bg-base-200"><div class="card-body gap-3">
+        <h3 class="card-title text-base">Several WezTerm windows</h3>
+        <p class="text-sm">Agents in every window are listed together, and dropping in raises the right window, not just the right tab. WezTerm's command line cannot raise a window on its own, so a five-line hook in <code class="inline path">~/.wezterm.lua</code> does it. Measured on your two windows: the other window came forward in about a quarter of a second.</p>
+        <p class="text-sm">In <code class="inline">ag</code>, tabs are named <code class="inline">window.tab</code> when there is more than one window (<code class="inline">ag go 2.3</code>).</p>
+      </div></div>
+      <div id="more-codex" class="card card-border bg-base-200"><div class="card-body gap-3">
+        <h3 class="card-title text-base">Codex questions now show as blocked</h3>
+        <p class="text-sm">Your saltline Codex session had a question pending while it kept working, and the deck was showing it as busy. Codex flags this in its tab title ("Action Required"); the deck now reads that and shows the agent as blocked with "a question for you". It caught that real session as soon as the rule went in.</p>
+      </div></div>
+    </div>
+
+    <div class="grid gap-6 lg:grid-cols-2 items-start">
+      <figure id="more-queue" class="rounded-box border border-base-content/10 bg-base-200 p-2">
+        <img src="deck-queued.png" alt="A reply queued for a busy agent" class="rounded-box w-full">
+        <figcaption class="text-sm opacity-70 px-2 pt-2"><strong>Queue a reply for a busy agent.</strong> Write it now; it is sent the moment that turn ends, through the same checks as any reply. It is tied to that one turn: if you interrupt the agent, or it gets another prompt first, the queued reply is dropped back into the box as a draft and a banner tells you. <kbd class="kbd kbd-sm">⌘</kbd><kbd class="kbd kbd-sm">↩</kbd> again takes it back.</figcaption>
+      </figure>
+      <figure id="more-new" class="rounded-box border border-base-content/10 bg-base-200 p-2">
+        <img src="deck-new.png" alt="The new agent form" class="rounded-box w-full">
+        <figcaption class="text-sm opacity-70 px-2 pt-2"><strong>Start an agent without leaving your work</strong> (<kbd class="kbd kbd-sm">⌘</kbd><kbd class="kbd kbd-sm">N</kbd>). It opens a new tab in the background and you stay where you are. The form starts in the selected agent's folder and shows the exact command before it runs. The defaults are what you already run (<code class="inline">claude --dangerously-skip-permissions</code>, <code class="inline">personalcodex --yolo</code>); edit the line and it remembers.</figcaption>
+      </figure>
+    </div>
+    <div id="more-changes" class="card card-border bg-base-200"><div class="card-body gap-2">
+      <h3 class="card-title text-base">What it changed</h3>
+      <p class="text-sm max-w-3xl">For an agent working in a git repository, the deck shows the branch and, under its last message, what <code class="inline">git status</code> reports there (the first capture on this page shows 62 changed files in harvestcrown). It is read only when you select that agent, and never takes a lock an agent could trip over. A working agent whose log has not moved for five minutes is marked "quiet", which is usually a long command and occasionally a hang.</p>
+    </div></div>
+  </section>
+
+  <!-- ───────────── replying ───────────── -->
+  <section id="reply" class="space-y-4">
+    <div class="space-y-2">
+      <h2 class="text-2xl font-bold">Replying without switching, and when it refuses</h2>
+      <p class="max-w-3xl opacity-80">The reply box types into the agent's terminal for you: it pastes your text into its prompt and presses Return. Typing into the wrong place would be worse than not typing, so it only goes ahead on proof.</p>
+    </div>
+    <div class="grid gap-4 lg:grid-cols-2">
+      <div id="reply-rules" class="card card-border bg-base-200"><div class="card-body gap-3">
+        <h3 class="card-title text-base">Checked at the moment of sending</h3>
+        <ul class="space-y-2 text-sm list-disc pl-5">
+          <li>The agent is <strong>waiting for a prompt</strong>. Not working, not blocked on a dialog.</li>
+          <li>The agent's process is still <strong>in control of that terminal</strong>, so text cannot land in a shell it left behind.</li>
+          <li>Its input line is <strong>visibly empty</strong>: only the dimmed placeholder, no dialog, nothing you half-typed there earlier.</li>
+          <li>The agent's status is fresh. If the feed has gone quiet the deck says so and turns replies off.</li>
+        </ul>
+        <p class="text-sm opacity-70">If any check fails nothing is typed, the reason appears next to the box, and your draft stays where it is.</p>
+      </div></div>
+      <div id="reply-proof" class="card card-border bg-base-200"><div class="card-body gap-3">
+        <h3 class="card-title text-base">What I watched it do</h3>
+        <ul class="space-y-2 text-sm list-disc pl-5">
+          <li>A two-line reply sent from the deck arrived in a real Claude Code session as one message and was answered. The same through <code class="inline">ag send</code> to a real Codex session.</li>
+          <li>With "half typed draft" already sitting in the agent's prompt, the send was refused and the terminal was left untouched. After clearing the prompt, the same draft went through.</li>
+          <li>Sends into a live permission dialog and into Codex's "Trust this folder?" prompt were refused.</li>
+        </ul>
+        <p class="text-sm opacity-70">One gap remains: between the last check and the keystrokes there are a few milliseconds in which an agent could change state. Typing into a terminal cannot close that completely.</p>
+      </div></div>
+    </div>
+  </section>
+
+  <!-- ───────────── the table ───────────── -->
+  <section id="live" class="space-y-6">
+    <div class="space-y-2">
+      <h2 class="text-2xl font-bold">Underneath: type <span class="font-mono text-primary">ag</span> and you get this</h2>
+      <p class="max-w-3xl opacity-80">The deck reads its data from this command. Real output from your machine, captured 4 October 2026 at 09:47. Agents that need you are always on top, longest-waiting first.</p>
+    </div>
+
+    <div id="live-capture" class="mockup-code term w-full">
+      <pre data-prefix="$"><code>ag</code></pre>
+      <pre data-prefix=" "><code>2 need you · 3 working</code></pre>
+      <pre data-prefix=" "><code> </code></pre>
+      <pre data-prefix=" "><code class="dim">TAB  STATE        FOR   AGENT   PROJECT         WHAT</code></pre>
+      <pre data-prefix=" "><code><span class="s-yours">5    ◆ your turn</span>  6h    codex   codex-sea-game  Inspect model (+2 subagents) — Built **LAST LIGHT**, a complete 3D ocean rescue game…</code></pre>
+      <pre data-prefix=" "><code><span class="s-yours">4    ◆ your turn</span>  5h    claude  sea-game        Ocean game production build — IRONWAKE is built and playable: a naval combat game…</code></pre>
+      <pre data-prefix=" "><code><span class="s-working">2    ⠿ working  </span>  1m    claude  personal        Empire game with Catan aesthetic — Interface ticket merged. Now the rules ticket.</code></pre>
+      <pre data-prefix=" "><code><span class="s-working">1    ⠿ working  </span>  1m    codex   voidreach       Restart Docker Desktop preserving (+3 subagents) — The Linux backup-suite run…</code></pre>
+      <pre data-prefix=" "><code><span class="s-working">3    ⠿ working  </span>  1m    claude  personal        Multi-cloud context manager with codec agents — Confirmed: `git` (2.54.0) and…</code></pre>
+    </div>
+
+    <div id="columns" class="space-y-3">
+      <h3 class="text-lg font-semibold">Reading a row</h3>
+      <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <div id="col-tab" class="card card-border bg-base-200"><div class="card-body p-4 gap-1">
+          <span class="font-mono text-primary text-sm">TAB</span>
+          <p class="text-sm">The tab's position in WezTerm's tab bar, so <kbd class="kbd kbd-sm">⌘</kbd><kbd class="kbd kbd-sm">5</kbd> gets you there. A dash means the agent has no WezTerm tab (a headless run, or another terminal).</p>
+        </div></div>
+        <div id="col-state" class="card card-border bg-base-200"><div class="card-body p-4 gap-1">
+          <span class="font-mono text-primary text-sm">STATE</span>
+          <p class="text-sm">One of three: <span class="s-blocked">● BLOCKED</span>, <span class="s-yours">◆ your turn</span>, <span class="s-working">⠿ working</span>. Explained in the next section.</p>
+        </div></div>
+        <div id="col-for" class="card card-border bg-base-200"><div class="card-body p-4 gap-1">
+          <span class="font-mono text-primary text-sm">FOR</span>
+          <p class="text-sm">How long the agent has been in that state. "your turn 6h" means it finished six hours ago and nobody has replied.</p>
+        </div></div>
+        <div id="col-agent" class="card card-border bg-base-200"><div class="card-body p-4 gap-1">
+          <span class="font-mono text-primary text-sm">AGENT</span>
+          <p class="text-sm"><code class="inline">claude</code> is a Claude Code session, <code class="inline">codex</code> an interactive Codex session, <code class="inline">exec</code> a headless Codex run with no window (your <code class="inline">run_codex.sh</code> tickets).</p>
+        </div></div>
+        <div id="col-project" class="card card-border bg-base-200"><div class="card-body p-4 gap-1">
+          <span class="font-mono text-primary text-sm">PROJECT</span>
+          <p class="text-sm">The folder the agent was started in. A session started in <code class="inline">~/personal</code> shows as "personal" even if it works elsewhere; the title tells you what it is really about.</p>
+        </div></div>
+        <div id="col-what" class="card card-border bg-base-200"><div class="card-body p-4 gap-1">
+          <span class="font-mono text-primary text-sm">WHAT</span>
+          <p class="text-sm">The session's title, then the first line of the last thing it said. For headless runs: ticket, model and mode. "+2 subagents" counts helper threads a Codex session has spawned.</p>
+        </div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ───────────── states ───────────── -->
+  <section id="states" class="space-y-6">
+    <div class="space-y-2">
+      <h2 class="text-2xl font-bold">Three states, and only two of them want you</h2>
+      <p class="max-w-3xl opacity-80">An agent is either busy, finished, or stuck. The glyph and the word carry the meaning, so the colour is a bonus and never the only signal.</p>
+    </div>
+
+    <div class="space-y-4">
+      <figure class="figwrap rounded-box border border-base-content/10 bg-base-100 p-3">
+        <svg class="fig" viewBox="0 0 900 300" role="img" aria-labelledby="fig-states-title">
+          <title id="fig-states-title">How an agent moves between working, your turn and blocked</title>
+          <defs>
+            <marker id="ah-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-ok"/></marker>
+            <marker id="ah-warn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-warn"/></marker>
+            <marker id="ah-err" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-err"/></marker>
+          </defs>
+
+          <g id="edge-finish"><title>The agent finishes its turn and waits for your next prompt</title>
+            <path class="edge c-warn" d="M290,132 C 400,70 500,45 610,48" marker-end="url(#ah-warn)"/>
+            <text class="lbl" x="440" y="40" text-anchor="middle">finishes its turn</text></g>
+          <g id="edge-prompt"><title>You send a prompt and the agent starts working again</title>
+            <path class="edge c-ok" d="M610,74 C 510,84 400,112 290,144" marker-end="url(#ah-ok)"/>
+            <text class="lbl" x="462" y="128" text-anchor="middle">you send a prompt</text></g>
+          <g id="edge-stuck"><title>The agent stops mid-task on a dialog or a question</title>
+            <path class="edge c-err" d="M290,168 C 400,230 500,255 610,252" marker-end="url(#ah-err)"/>
+            <text class="lbl" x="440" y="274" text-anchor="middle">hits a dialog or question</text></g>
+          <g id="edge-answer"><title>You answer and the agent carries on</title>
+            <path class="edge c-ok" d="M610,226 C 510,216 400,188 290,156" marker-end="url(#ah-ok)"/>
+            <text class="lbl" x="462" y="184" text-anchor="middle">you answer it</text></g>
+
+          <g id="node-working"><title>working: the agent is busy; nothing for you to do</title>
+            <rect class="box c-ok" x="40" y="114" width="250" height="72" rx="14"/>
+            <text class="t f-ok" x="165" y="146" text-anchor="middle">⠿ working</text>
+            <text class="sub" x="165" y="168" text-anchor="middle">busy; leave it alone</text></g>
+          <g id="node-yours"><title>your turn: the agent finished and is waiting for a prompt</title>
+            <rect class="box c-warn" x="610" y="24" width="250" height="72" rx="14"/>
+            <text class="t f-warn" x="735" y="56" text-anchor="middle">◆ your turn</text>
+            <text class="sub" x="735" y="78" text-anchor="middle">finished; waiting for a prompt</text></g>
+          <g id="node-blocked"><title>BLOCKED: the agent is stuck mid-task until you answer</title>
+            <rect class="box c-err" x="610" y="204" width="250" height="72" rx="14"/>
+            <text class="t f-err" x="735" y="236" text-anchor="middle">● BLOCKED</text>
+            <text class="sub" x="735" y="258" text-anchor="middle">stuck mid-task until you answer</text></g>
+        </svg>
+      </figure>
+
+      <div class="grid gap-3 lg:grid-cols-3">
+        <div id="state-blocked" class="card card-border bg-base-200"><div class="card-body p-4 gap-1">
+          <h3 class="font-semibold"><span class="s-blocked">● BLOCKED</span> <span class="badge badge-soft badge-error badge-sm">go now</span></h3>
+          <p class="text-sm">Half-done work is parked on a dialog or a question. Sorted first, and the only state whose notification plays a sound.</p>
+        </div></div>
+        <div id="state-yours" class="card card-border bg-base-200"><div class="card-body p-4 gap-1">
+          <h3 class="font-semibold"><span class="s-yours">◆ your turn</span> <span class="badge badge-soft badge-warning badge-sm">when you can</span></h3>
+          <p class="text-sm">The agent finished and handed back. If it says "background shell running", the turn is over but a shell it started is still alive: either a watcher it will wake up on, or just a dev server. ag cannot tell which, so it shows it to you.</p>
+        </div></div>
+        <div id="state-working" class="card card-border bg-base-200"><div class="card-body p-4 gap-1">
+          <h3 class="font-semibold"><span class="s-working">⠿ working</span> <span class="badge badge-soft badge-success badge-sm">ignore</span></h3>
+          <p class="text-sm">Busy. The WHAT column shows its latest narration, or the tool it is running when it has not said anything recently.</p>
+        </div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ───────────── the loop ───────────── -->
+  <section id="loop" class="space-y-6">
+    <div class="space-y-2">
+      <h2 class="text-2xl font-bold">The loop: from hand-back to reply</h2>
+      <p class="max-w-3xl opacity-80">This is the whole habit. Keep <code class="inline">ag watch</code> open in one tab and the rest follows.</p>
+    </div>
+
+    <figure class="figwrap rounded-box border border-base-content/10 bg-base-100 p-3">
+      <svg class="fig" viewBox="0 0 1000 230" role="img" aria-labelledby="fig-loop-title">
+        <title id="fig-loop-title">The five steps from an agent handing back to you replying</title>
+        <defs>
+          <marker id="ah-pri" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-pri"/></marker>
+          <marker id="ah-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-dim"/></marker>
+        </defs>
+
+        <g id="loop-1"><title>Step 1: an agent finishes its turn or gets stuck</title>
+          <rect class="box" x="6" y="30" width="164" height="76" rx="12"/>
+          <text class="t" x="88" y="62" text-anchor="middle" style="font-size:15px">Agent hands back</text>
+          <text class="sub" x="88" y="84" text-anchor="middle">turn done, or stuck</text></g>
+        <g id="loop-2"><title>Step 2: ag watch raises a macOS notification</title>
+          <rect class="box" x="212" y="30" width="164" height="76" rx="12"/>
+          <text class="t" x="294" y="62" text-anchor="middle" style="font-size:15px">Banner appears</text>
+          <text class="sub" x="294" y="84" text-anchor="middle">while ag watch is open</text></g>
+        <g id="loop-3"><title>Step 3: Ctrl+A then n jumps to the agent that needs you most</title>
+          <rect class="box c-pri" x="418" y="30" width="164" height="76" rx="12"/>
+          <text class="t" x="500" y="62" text-anchor="middle" style="font-size:15px">Jump to it</text>
+          <text class="sub mono" x="500" y="84" text-anchor="middle">Ctrl+A, then n</text></g>
+        <g id="loop-4"><title>Step 4: ag peek recaps what you asked and what it answered</title>
+          <rect class="box" x="624" y="30" width="164" height="76" rx="12"/>
+          <text class="t" x="706" y="62" text-anchor="middle" style="font-size:15px">Recap</text>
+          <text class="sub mono" x="706" y="84" text-anchor="middle">ag peek</text></g>
+        <g id="loop-5"><title>Step 5: you reply and the agent resumes</title>
+          <rect class="box" x="830" y="30" width="164" height="76" rx="12"/>
+          <text class="t" x="912" y="62" text-anchor="middle" style="font-size:15px">Reply</text>
+          <text class="sub" x="912" y="84" text-anchor="middle">it resumes</text></g>
+
+        <path id="loop-a1" class="edge c-pri" d="M170,68 H210" marker-end="url(#ah-pri)"><title>then</title></path>
+        <path id="loop-a2" class="edge c-pri" d="M376,68 H416" marker-end="url(#ah-pri)"><title>then</title></path>
+        <path id="loop-a3" class="edge c-pri" d="M582,68 H622" marker-end="url(#ah-pri)"><title>then</title></path>
+        <path id="loop-a4" class="edge c-pri" d="M788,68 H828" marker-end="url(#ah-pri)"><title>then</title></path>
+        <g id="loop-back"><title>The agent goes back to work and you move on, until the next hand-back</title>
+          <path class="edge" d="M912,106 V166 Q912,182 896,182 H104 Q88,182 88,166 V110" marker-end="url(#ah-dim)" stroke-dasharray="6 6"/>
+          <text class="lbl" x="500" y="208" text-anchor="middle" style="opacity:.75">it goes back to work, you move on, until the next hand-back</text></g>
+      </svg>
+    </figure>
+
+    <div class="grid gap-4 lg:grid-cols-2">
+      <div id="loop-jump" class="card card-border bg-base-200"><div class="card-body gap-3">
+        <h3 class="card-title text-base">Jumping</h3>
+        <p class="text-sm"><kbd class="kbd kbd-sm">Ctrl</kbd>+<kbd class="kbd kbd-sm">A</kbd> then <kbd class="kbd kbd-sm">n</kbd> takes you to the most urgent agent that needs you: blocked ones first, then the one that has waited longest. Press it again from there to move to the next. If nothing needs you it does nothing.</p>
+        <p class="text-sm">From a shell, <code class="inline">ag next</code> is the same thing and <code class="inline">ag go 4</code> goes to tab 4.</p>
+      </div></div>
+      <div id="loop-watch" class="card card-border bg-base-200"><div class="card-body gap-3">
+        <h3 class="card-title text-base">Watching</h3>
+        <p class="text-sm"><kbd class="kbd kbd-sm">Ctrl</kbd>+<kbd class="kbd kbd-sm">A</kbd> then <kbd class="kbd kbd-sm">a</kbd> opens <code class="inline">ag watch</code> in a new tab: the table, redrawn every two seconds. <kbd class="kbd kbd-sm">Ctrl</kbd>+<kbd class="kbd kbd-sm">C</kbd> closes it.</p>
+        <p class="text-sm">While it is open, a macOS notification fires the moment any agent stops working. Close the tab and the notifications stop.</p>
+      </div></div>
+    </div>
+
+    <div id="loop-peek" class="space-y-3">
+      <h3 class="text-lg font-semibold">Recap before you switch</h3>
+      <p class="max-w-3xl text-sm opacity-80">Re-reading scrollback is the expensive part of switching. <code class="inline">ag peek</code> prints what you last asked and how the agent answered, for one tab or for every agent that needs you. Real output, shortened where marked:</p>
+      <div class="mockup-code term w-full">
+        <pre data-prefix="$"><code>ag peek 5</code></pre>
+        <pre data-prefix=" "><code> </code></pre>
+        <pre data-prefix=" "><code>── tab 5 · codex · codex-sea-game · <span class="s-yours">◆ your turn</span> 6h · Inspect model (+2 subagents)</code></pre>
+        <pre data-prefix=" "><code>you asked:  You can use the blender MCP too</code></pre>
+        <pre data-prefix=" "><code>it said:</code></pre>
+        <pre data-prefix=" "><code>  Built **LAST LIGHT**, a complete 3D ocean rescue game with a custom Blender vessel, reflective waves, …</code></pre>
+        <pre data-prefix=" "><code>  **[Play now](http://localhost:4173)** — recover three survivors and bring them safely to harbor.</code></pre>
+        <pre data-prefix=" "><code>  All **8 acceptance criteria passed**:</code></pre>
+        <pre data-prefix=" "><code class="dim">  … (the reply continues, up to 1,500 characters)</code></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ───────────── commands ───────────── -->
+  <section id="commands" class="space-y-4">
+    <div class="space-y-2">
+      <h2 class="text-2xl font-bold">Every command</h2>
+      <p class="max-w-3xl opacity-80">Nine commands and two key chords. The last column says how each was checked, so you know which ones you are the first to try.</p>
+    </div>
+    <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100">
+      <table class="table min-w-[46rem]">
+        <thead><tr><th>Command</th><th>What it does</th><th>Reach for it when</th><th>Checked</th></tr></thead>
+        <tbody>
+          <tr id="cmd-ag"><td><code class="inline">ag</code></td><td>Prints the table once.</td><td>You sit down, or come back from a break.</td><td><span class="badge badge-soft badge-success badge-sm whitespace-nowrap">verified live</span></td></tr>
+          <tr id="cmd-watch"><td><code class="inline">ag watch</code></td><td>The table, redrawn every 2 seconds, plus hand-back notifications.</td><td>Agents are running and you want a dashboard tab.</td><td><span class="badge badge-soft badge-success badge-sm whitespace-nowrap">verified live</span></td></tr>
+          <tr id="cmd-peek"><td><code class="inline">ag peek</code></td><td>Recap for every agent that needs you: your last ask, its reply.</td><td>Deciding which agent to deal with first.</td><td><span class="badge badge-soft badge-success badge-sm whitespace-nowrap">verified live</span></td></tr>
+          <tr id="cmd-peek-n"><td><code class="inline">ag peek 5</code></td><td>The same recap for tab 5 only, whatever its state.</td><td>Checking on one agent without leaving your tab.</td><td><span class="badge badge-soft badge-success badge-sm whitespace-nowrap">verified live</span></td></tr>
+          <tr id="cmd-next"><td><code class="inline">ag next</code></td><td>Jumps to the most urgent agent that needs you; repeat to cycle.</td><td>You are in a shell and want to start clearing the queue.</td><td><span class="badge badge-soft badge-success badge-sm whitespace-nowrap">verified live</span></td></tr>
+          <tr id="cmd-go"><td><code class="inline">ag go 4</code></td><td>Jumps to tab 4.</td><td>You already know where you want to be.</td><td><span class="badge badge-soft badge-success badge-sm whitespace-nowrap">verified live</span></td></tr>
+          <tr id="cmd-check"><td><code class="inline">ag check</code></td><td>Runs the built-in self-test and prints "ok".</td><td>After anyone edits the file.</td><td><span class="badge badge-soft badge-success badge-sm whitespace-nowrap">verified live</span></td></tr>
+          <tr id="cmd-send"><td class="whitespace-nowrap"><code class="inline">ag send ID</code></td><td>Pastes standard input into that agent's prompt and presses Return, with the checks described under Replying.</td><td>Scripting a reply; it is what the deck's reply box calls.</td><td><span class="badge badge-soft badge-success badge-sm whitespace-nowrap">verified live</span></td></tr>
+          <tr id="cmd-stream"><td class="whitespace-nowrap"><code class="inline">ag stream</code></td><td>Everything ag knows, as one JSON line every 2 seconds.</td><td>You don't; the app runs it.</td><td><span class="badge badge-soft badge-success badge-sm whitespace-nowrap">verified live</span></td></tr>
+          <tr id="key-n"><td class="whitespace-nowrap"><kbd class="kbd kbd-sm">Ctrl</kbd>+<kbd class="kbd kbd-sm">A</kbd> <kbd class="kbd kbd-sm">n</kbd></td><td>Runs <code class="inline">ag next</code> from any tab.</td><td>All the time. This is the main one.</td><td><span class="badge badge-soft badge-warning badge-sm whitespace-nowrap">not pressed yet</span></td></tr>
+          <tr id="key-a"><td class="whitespace-nowrap"><kbd class="kbd kbd-sm">Ctrl</kbd>+<kbd class="kbd kbd-sm">A</kbd> <kbd class="kbd kbd-sm">a</kbd></td><td>Opens <code class="inline">ag watch</code> in a new tab.</td><td>Starting a session with several agents.</td><td><span class="badge badge-soft badge-warning badge-sm whitespace-nowrap">not pressed yet</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="text-sm opacity-70 max-w-3xl">"Not pressed yet": WezTerm lists both chords in its key table, and the command each one runs was tested in the same bare environment WezTerm uses. I cannot press keys, so you are the first to try the chords themselves.</p>
+  </section>
+
+  <!-- ───────────── how it knows ───────────── -->
+  <section id="sources" class="space-y-6">
+    <div class="space-y-2">
+      <h2 class="text-2xl font-bold">How it knows</h2>
+      <p class="max-w-3xl opacity-80">ag adds nothing to your agents: no hooks, no wrappers, no daemon. Each time it runs it reads what Claude Code, Codex and WezTerm already write down, then exits.</p>
+    </div>
+
+    <figure class="figwrap rounded-box border border-base-content/10 bg-base-100 p-3">
+      <svg class="fig" viewBox="0 0 1000 400" role="img" aria-labelledby="fig-src-title">
+        <title id="fig-src-title">The four things ag reads and the three things it produces</title>
+        <defs>
+          <marker id="ah-dim2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-dim"/></marker>
+          <marker id="ah-pri2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-pri"/></marker>
+        </defs>
+
+        <path id="src-e1" class="edge" d="M310,46 C 375,46 365,163 420,163" marker-end="url(#ah-dim2)"><title>Claude session files feed ag</title></path>
+        <path id="src-e2" class="edge" d="M310,142 C 365,142 370,181 420,181" marker-end="url(#ah-dim2)"><title>Claude transcripts feed ag</title></path>
+        <path id="src-e3" class="edge" d="M310,238 C 365,238 370,199 420,199" marker-end="url(#ah-dim2)"><title>Codex rollout logs feed ag</title></path>
+        <path id="src-e4" class="edge" d="M310,334 C 375,334 365,217 420,217" marker-end="url(#ah-dim2)"><title>The WezTerm pane list feeds ag</title></path>
+        <path id="src-o1" class="edge c-pri" d="M580,170 C 635,170 635,94 690,94" marker-end="url(#ah-pri2)"><title>ag prints the table</title></path>
+        <path id="src-o2" class="edge c-pri" d="M580,190 H688" marker-end="url(#ah-pri2)"><title>ag raises a notification</title></path>
+        <path id="src-o3" class="edge c-pri" d="M580,210 C 635,210 635,286 690,286" marker-end="url(#ah-pri2)"><title>ag switches WezTerm tabs</title></path>
+
+        <g id="src-claude-state"><title>Claude session files: one small file per running session with its current state</title>
+          <rect class="box" x="10" y="14" width="300" height="64" rx="12"/>
+          <text class="t" x="28" y="42">Claude session files</text>
+          <text class="sub" x="28" y="62">state: busy, idle or waiting</text></g>
+        <g id="src-claude-log"><title>Claude transcripts: the conversation log of each session</title>
+          <rect class="box" x="10" y="110" width="300" height="64" rx="12"/>
+          <text class="t" x="28" y="138">Claude transcripts</text>
+          <text class="sub" x="28" y="158">title, your last ask, its last reply</text></g>
+        <g id="src-codex-log"><title>Codex rollout logs: the event log each Codex process keeps open</title>
+          <rect class="box" x="10" y="206" width="300" height="64" rx="12"/>
+          <text class="t" x="28" y="234">Codex rollout logs</text>
+          <text class="sub" x="28" y="254">turn started / turn complete</text></g>
+        <g id="src-wez"><title>WezTerm pane list: which terminal each tab is running</title>
+          <rect class="box" x="10" y="302" width="300" height="64" rx="12"/>
+          <text class="t" x="28" y="330">WezTerm pane list</text>
+          <text class="sub" x="28" y="350">which tab each agent is in</text></g>
+
+        <g id="src-ag"><title>ag: one Python file that reads the sources and exits</title>
+          <rect class="box c-pri" x="420" y="134" width="160" height="112" rx="16"/>
+          <text class="mono f-pri" x="500" y="192" text-anchor="middle" style="font-size:38px;font-weight:700">ag</text>
+          <text class="sub" x="500" y="222" text-anchor="middle">one Python file</text></g>
+
+        <g id="out-table"><title>Output: the table, live view and recap</title>
+          <rect class="box" x="690" y="62" width="300" height="64" rx="12"/>
+          <text class="t" x="708" y="90">The table</text>
+          <text class="sub mono" x="708" y="110">ag · ag watch · ag peek</text></g>
+        <g id="out-notify"><title>Output: a macOS notification when an agent stops working</title>
+          <rect class="box" x="690" y="158" width="300" height="64" rx="12"/>
+          <text class="t" x="708" y="186">A notification</text>
+          <text class="sub" x="708" y="206">when an agent stops working</text></g>
+        <g id="out-jump"><title>Output: switching to the right WezTerm tab</title>
+          <rect class="box" x="690" y="254" width="300" height="64" rx="12"/>
+          <text class="t" x="708" y="282">A tab jump</text>
+          <text class="sub mono" x="708" y="302">ag next · ag go N</text></g>
+      </svg>
+    </figure>
+
+    <div class="collapse collapse-arrow bg-base-200 border border-base-content/10">
+      <input type="checkbox" aria-label="Show the exact files ag reads">
+      <div class="collapse-title font-semibold">The exact files, if you want to check my work</div>
+      <div class="collapse-content">
+        <div class="overflow-x-auto">
+          <table class="table table-sm">
+            <thead><tr><th>What ag needs</th><th>Where it reads it</th></tr></thead>
+            <tbody>
+              <tr id="ev-claude-state"><td>Claude: state and how long</td><td><code class="inline path">~/.claude/sessions/&lt;pid&gt;.json</code>, fields <code class="inline">status</code>, <code class="inline">waitingFor</code>, <code class="inline">statusUpdatedAt</code></td></tr>
+              <tr id="ev-claude-log"><td>Claude: title, last ask, last reply</td><td>the last 4 MB of <code class="inline path">~/.claude/projects/*/&lt;sessionId&gt;.jsonl</code></td></tr>
+              <tr id="ev-codex-map"><td>Codex: which log belongs to which process</td><td><code class="inline">lsof -c codex</code>, looking for open files under <code class="inline path">$CODEX_HOME/sessions</code></td></tr>
+              <tr id="ev-codex-state"><td>Codex: state and last reply</td><td>the last <code class="inline">task_started</code> or <code class="inline">task_complete</code> event in that log</td></tr>
+              <tr id="ev-codex-ask"><td>Codex: your last ask</td><td><code class="inline path">$CODEX_HOME/history.jsonl</code></td></tr>
+              <tr id="ev-exec-name"><td>Headless run: its name</td><td>the parent command, <code class="inline">run_codex.sh &lt;ticket&gt; …</code></td></tr>
+              <tr id="ev-tab"><td>Tab number</td><td><code class="inline">wezterm cli list</code>, matching each agent's terminal device to a tab</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="text-sm opacity-70 mt-3">These are Claude Code's and Codex's own internal files, not a published interface. If an update changes them, ag will show wrong or missing rows, and that is the place to look.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ───────────── what was checked ───────────── -->
+  <section id="checked" class="space-y-4">
+    <div class="space-y-2">
+      <h2 class="text-2xl font-bold">What was checked, and what was not</h2>
+      <p class="max-w-3xl opacity-80">Everything on the left I watched happen on your machine. Everything on the right is built and reasoned through, but nobody has seen it work yet.</p>
+    </div>
+    <div class="grid gap-4 lg:grid-cols-2">
+      <div class="card card-border bg-base-200"><div class="card-body gap-3">
+        <h3 class="card-title text-base"><span class="badge badge-success badge-sm">seen working</span></h3>
+        <ul class="space-y-2 text-sm list-disc pl-5">
+          <li id="ok-table">The table, against eight agents running at once: three Claude sessions, two Codex sessions, three headless runs.</li>
+          <li id="ok-codex-done">Codex sessions finishing their turn and showing as "your turn" with their final message (this morning's table).</li>
+          <li id="ok-shell">A Claude session finishing with a background shell still alive.</li>
+          <li id="ok-jump"><code class="inline">ag go</code> and <code class="inline">ag next</code> switching tabs, confirmed from inside WezTerm with a temporary probe.</li>
+          <li id="ok-watch"><code class="inline">ag watch</code> redrawing (27 frames in a test run).</li>
+          <li id="ok-selftest">The self-test, <code class="inline">ag check</code>, and the deck's interface test (<code class="inline">app/test.cjs</code>).</li>
+          <li id="ok-blocked">BLOCKED, live: a Claude permission prompt and Codex's folder-trust prompt both showed as blocked.</li>
+          <li id="ok-app">The app: showing, pinning to the strip, expanding, live data, the terminal view, and replies delivered end to end.</li>
+          <li id="ok-queue">A queued reply, live: with the agent busy nothing was sent; when its turn ended it was sent once and answered.</li>
+          <li id="ok-launch">Starting an agent from the deck, live: new tab in the background, first prompt delivered (even one beginning with dashes), and a double press started only one.</li>
+          <li id="ok-window">Jumping into your second WezTerm window: that window came to the front in about 250 ms.</li>
+          <li id="ok-feed">The app's data feed does not slow WezTerm: 0 slow responses in 108 samples with it on, 0 in 106 with it off.</li>
+        </ul>
+      </div></div>
+      <div class="card card-border bg-base-200"><div class="card-body gap-3">
+        <h3 class="card-title text-base"><span class="badge badge-warning badge-sm">not seen</span></h3>
+        <ul class="space-y-2 text-sm list-disc pl-5">
+          <li id="no-hotkey"><strong>The hotkeys as keystrokes (⌥Space and ⌥⇧Space).</strong> macOS accepted the registration, and everything it triggers was driven through the app's own URL scheme, but I cannot press keys. Same for how the deck takes and gives back the keyboard.</li>
+          <li id="no-look"><strong>The window itself.</strong> I can photograph the deck's contents (the captures above) but not your screen, so the blur behind it, its shadow and its exact placement are unseen.</li>
+          <li id="no-banner"><strong>The notification banner.</strong> The macOS call succeeded, but I cannot see your screen. If no banner appears, allow notifications for Script Editor in System Settings.</li>
+          <li id="no-keys"><strong>The two key chords.</strong> Registered and wired, never pressed.</li>
+          <li id="no-codex-approval"><strong>Codex command-approval prompts.</strong> A dialog on a Codex terminal is now detected from its screen, and that worked on the real "Trust this folder?" prompt. I could not make Codex ask for a command approval, so that one rests on it being drawn the same way.</li>
+          <li id="no-native-banner"><strong>Standard macOS notifications need one switch from you.</strong> The app is now signed with your development certificate, and macOS did put up its "Agentdeck would like to send notifications" prompt. It went unanswered, and restarting the app during development withdrew it, which macOS records as a no. To turn them on: right-click the menu-bar icon → "Use macOS notifications…" and switch on Allow notifications. The app notices within about 15 seconds. Until then it shows its own banner beside the pill, and clicking that banner takes you to the agent.</li>
+        </ul>
+      </div></div>
+    </div>
+  </section>
+
+  <!-- ───────────── tab colouring ───────────── -->
+  <section id="tabs" class="space-y-4">
+    <div class="space-y-2">
+      <h2 class="text-2xl font-bold">Tab colouring is built, and switched off</h2>
+      <p class="max-w-3xl opacity-80">I also built per-tab colours (red blocked, yellow your turn, green working) and an "N need you" count in the status bar. It works, and it made WezTerm slower, so it ships off.</p>
+    </div>
+    <div class="grid gap-4 lg:grid-cols-5 items-start">
+      <div class="lg:col-span-3 overflow-x-auto rounded-box border border-base-content/10 bg-base-100">
+        <table class="table">
+          <caption class="caption-top text-left px-4 pt-3 text-sm opacity-70">How often WezTerm was slow to answer, alternating the two configs every 30 seconds for six minutes</caption>
+          <thead><tr><th>Config</th><th class="text-right">Samples</th><th class="text-right">Slower than 1 s</th><th class="text-right">No answer in 4 s</th></tr></thead>
+          <tbody>
+            <tr id="ab-orig"><td>Your original config</td><td class="text-right">144</td><td class="text-right">6 (4%)</td><td class="text-right">3</td></tr>
+            <tr id="ab-tabs"><td>With tab colouring on</td><td class="text-right">103</td><td class="text-right font-semibold text-warning">16 (16%)</td><td class="text-right font-semibold text-warning">14</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="lg:col-span-2 space-y-3 text-sm">
+        <div id="tabs-caveat" role="alert" class="alert alert-soft alert-warning alert-vertical items-start text-left">
+          <span><strong>Read this with one caveat.</strong> The machine was under heavy load at the time (several agents, Godot instances, an Xcode install), and even your original config stalled. I did not find the cause, so this may look different on a quiet machine. That is a question, not a conclusion.</span>
+        </div>
+        <p id="tabs-enable"><strong>To try it:</strong> open <code class="inline path">~/.wezterm.lua</code>, find <code class="inline">local AG_TABS = false</code> and change it to <code class="inline">true</code>. WezTerm reloads when you save. Change it back to turn it off.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ───────────── files ───────────── -->
+  <section id="files" class="space-y-4">
+    <div class="space-y-2">
+      <h2 class="text-2xl font-bold">Where everything lives, and how to undo it</h2>
+      <p class="max-w-3xl opacity-80">One file is the tool. One of your files was edited, and the original is kept beside it.</p>
+    </div>
+    <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100">
+      <table class="table">
+        <thead><tr><th>Path</th><th>What it is</th></tr></thead>
+        <tbody>
+          <tr id="file-ag"><td><code class="inline path">~/personal/agentdeck/ag</code></td><td>The tool. One Python file, standard library only, about 340 lines.</td></tr>
+          <tr id="file-app"><td><code class="inline path">~/personal/agentdeck/Agentdeck.app</code></td><td>The deck. Built from <code class="inline path">app/main.swift</code> (the window, hotkey and menu bar) and <code class="inline path">app/deck.html</code> (the interface) by <code class="inline path">app/build.sh</code>. Running now; "Open at login" is in its menu-bar menu and is off.</td></tr>
+          <tr id="file-link"><td><code class="inline path">~/.local/bin/ag</code></td><td>A link to it, so <code class="inline">ag</code> works from any folder.</td></tr>
+          <tr id="file-wez"><td><code class="inline path">~/.wezterm.lua</code></td><td>Your WezTerm config, with an "Agent deck" block added: the two key chords and the dormant tab colouring.</td></tr>
+          <tr id="file-backup"><td><code class="inline path">~/.wezterm.lua.before-ag</code></td><td>Your config exactly as it was before I touched it.</td></tr>
+          <tr id="file-seen"><td><code class="inline path">~/.cache/ag-seen.json</code></td><td>The last state seen for each agent, so a notification fires once per hand-back and not on every refresh.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div id="undo" class="mockup-code term w-full">
+      <pre data-prefix="#"><code class="dim">restore your WezTerm config and take ag off your PATH (the file in ~/personal/agentdeck stays)</code></pre>
+      <pre data-prefix="$"><code>cp ~/.wezterm.lua.before-ag ~/.wezterm.lua</code></pre>
+      <pre data-prefix="$"><code>rm ~/.local/bin/ag ~/.cache/ag-seen.json</code></pre>
+      <pre data-prefix="$"><code>pkill Agentdeck; defaults delete dev.agentdeck.app</code></pre>
+    </div>
+  </section>
+
+  <!-- ───────────── left out ───────────── -->
+  <section id="next" class="space-y-4">
+    <div class="space-y-2">
+      <h2 class="text-2xl font-bold">Left out on purpose</h2>
+      <p class="max-w-3xl opacity-80">Each of these is a real gap. Tick the ones you want and queue them; the rest stay out. Two Codex reviewers attacked the design and then the code; their reports are in <code class="inline path">~/personal/agentdeck/.review/</code>.</p>
+    </div>
+    <form data-lavish-question="follow-ups" class="card card-border bg-base-200" onsubmit="
+      event.preventDefault();
+      const picked = [...event.currentTarget.querySelectorAll('input[name=items]:checked')].map((i) => ({ id: i.value, label: i.dataset.label, disposition: 'build' }));
+      const status = event.currentTarget.querySelector('[data-status]');
+      if (!picked.length) { status.textContent = 'Nothing ticked yet.'; return; }
+      if (!window.lavish) { status.textContent = 'Open this page through Lavish to send these, or tell the agent the IDs: ' + picked.map((p) => p.id).join(', '); return; }
+      window.lavish.queuePrompt('Build every selected ag follow-up and return an item-by-item receipt. Account for every submitted ID before reporting completion.', { tag: 'tracked-batch', text: 'Build ' + picked.length + ' ag follow-up(s): ' + picked.map((p) => p.id).join(', '), element: event.currentTarget, data: { items: picked } });
+      status.textContent = 'Queued ' + picked.length + '. Press Send to Agent in the Lavish bar to deliver.';
+    ">
+      <div class="card-body gap-4">
+        <label id="f-1" class="flex gap-3 items-start cursor-pointer">
+          <input type="checkbox" class="checkbox checkbox-primary mt-1" style="border-radius:.3rem" name="items" value="F-1" data-label="A since-you-last-looked handoff per agent">
+          <span><span class="badge badge-outline badge-sm font-mono">F-1</span> <strong>A fuller "since you last looked" handoff.</strong> Both reviewers named this as the biggest thing still missing: per agent, the diff itself, test results, and the one decision it needs from you. Today you get its last message and the changed-file list.</span>
+        </label>
+        <label id="f-2" class="flex gap-3 items-start cursor-pointer">
+          <input type="checkbox" class="checkbox checkbox-primary mt-1" style="border-radius:.3rem" name="items" value="F-2" data-label="Answer a dialog from the deck">
+          <span><span class="badge badge-outline badge-sm font-mono">F-2</span> <strong>Answering a dialog from the deck.</strong> A blocked agent shows its question, but you still have to drop in to pick Yes or No.</span>
+        </label>
+        <label id="f-3" class="flex gap-3 items-start cursor-pointer">
+          <input type="checkbox" class="checkbox checkbox-primary mt-1" style="border-radius:.3rem" name="items" value="F-3" data-label="Click-through notifications">
+          <span><span class="badge badge-outline badge-sm font-mono">F-3</span> <strong>Click-through notifications.</strong> Needs macOS to grant the app notification permission, which may take signing it properly.</span>
+        </label>
+        <label id="f-4" class="flex gap-3 items-start cursor-pointer">
+          <input type="checkbox" class="checkbox checkbox-primary mt-1" style="border-radius:.3rem" name="items" value="F-4" data-label="Rename agents and reorder groups">
+          <span><span class="badge badge-outline badge-sm font-mono">F-4</span> <strong>Your own names for agents.</strong> Titles come from Claude and Codex; some ("Inspect model") say little.</span>
+        </label>
+        <label id="f-5" class="flex gap-3 items-start cursor-pointer">
+          <input type="checkbox" class="checkbox checkbox-primary mt-1" style="border-radius:.3rem" name="items" value="F-5" data-label="Find why tab colouring slows WezTerm">
+          <span><span class="badge badge-outline badge-sm font-mono">F-5</span> <strong>Why WezTerm tab colouring slows WezTerm.</strong> Still off, still unexplained. The deck makes it less necessary.</span>
+        </label>
+        <label id="f-6" class="flex gap-3 items-start cursor-pointer">
+          <input type="checkbox" class="checkbox checkbox-primary mt-1" style="border-radius:.3rem" name="items" value="F-6" data-label="Claude background jobs and several WezTerm windows">
+          <span><span class="badge badge-outline badge-sm font-mono">F-6</span> <strong>Claude background jobs and several windows.</strong> Sessions started with <code class="inline">claude --bg</code> are not listed, and the ⌘N chips turn off if you open a second WezTerm window.</span>
+        </label>
+        <div class="card-actions items-center gap-3">
+          <button type="submit" class="btn btn-primary btn-sm">Queue selected follow-ups</button>
+          <span data-status role="status" aria-live="polite" class="text-sm opacity-80"></span>
+        </div>
+      </div>
+    </form>
+    <p class="text-sm opacity-70 max-w-3xl">Where to look next: the file itself is short and commented, and the four places where I took a deliberate shortcut are marked with <code class="inline">ponytail:</code> comments. To push back on anything above, select it in this page and annotate it.</p>
+  </section>
+
+</main>
+</body>
+</html>

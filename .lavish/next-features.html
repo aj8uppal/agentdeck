@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en" data-theme="luxury">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agentdeck: what to build next</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/daisyui.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/themes.css">
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.2.4/dist/index.global.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  :where(.grid, .flex) > * { min-width: 0; }
+  :where(p, h1, h2, h3, h4, li, dd, figcaption, td, th) { overflow-wrap: anywhere; }
+  body { background: var(--color-base-100); color: var(--color-base-content); }
+  section { scroll-margin-top: 1.5rem; }
+  .opt input[type=checkbox] { border-radius: .3rem; }
+  .opt .card-body > p { flex-grow: 0; }
+
+  /* mock-ups: drawn in the app's own colours, not the page's */
+  .mock { --text: #cdd6f4; --sub: #a6adc8; --o1: #8a90a8; --red: #f38ba8; --yellow: #f9e2af; --green: #a6e3a1; --blue: #89b4fa; --peach: #fab387; --mauve: #cba6f7;
+    background: #181825; border: 1px solid rgba(205, 214, 244, .1); border-radius: 12px; padding: 10px 12px; color: var(--text);
+    font: 13px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif; overflow: hidden; }
+  .mock .mono { font: 500 11px ui-monospace, "SF Mono", Menlo, monospace; }
+  .mock .bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .mock .chip { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 9px; border-radius: 11px; background: rgba(205, 214, 244, .07); color: var(--sub); font-size: 12px; white-space: nowrap; }
+  .mock .chip b { color: var(--text); font-weight: 650; }
+  .mock .chip.need { background: rgba(249, 226, 175, .13); color: var(--yellow); } .mock .chip.need b { color: var(--yellow); }
+  .mock .chip.block { background: rgba(243, 139, 168, .17); color: var(--red); } .mock .chip.block b { color: var(--red); }
+  .mock .chip.new { outline: 1px dashed var(--mauve); outline-offset: 2px; }
+  .mock .meter { width: 44px; height: 4px; border-radius: 2px; background: rgba(205, 214, 244, .14); overflow: hidden; }
+  .mock .meter i { display: block; height: 100%; background: var(--green); } .mock .meter.warn i { background: var(--yellow); } .mock .meter.bad i { background: var(--red); }
+  .mock .row { display: flex; align-items: center; gap: 10px; padding: 6px 2px; }
+  .mock .row + .row { border-top: 1px solid rgba(205, 214, 244, .06); }
+  .mock .dot { flex: none; width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--green); }
+  .mock .dot.you { border: 0; background: var(--yellow); transform: rotate(45deg); border-radius: 2px; } .mock .dot.blk { border: 0; background: var(--red); }
+  .mock .body { flex: 1; min-width: 0; }
+  .mock .title { font-weight: 560; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mock .line { font-size: 12px; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mock .claude { color: var(--peach); } .mock .codex { color: var(--blue); }
+  .mock .meta { flex: none; display: flex; align-items: center; gap: 7px; color: var(--o1); }
+  .mock .ask { margin: 4px 0 2px 19px; padding: 8px 10px; border-radius: 8px; background: rgba(243, 139, 168, .08); font-size: 12px; }
+  .mock .ask pre { margin: 0 0 7px; font: 11.5px/1.5 ui-monospace, "SF Mono", Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--sub); }
+  .mock .key { display: inline-flex; align-items: center; gap: 6px; margin: 0 6px 4px 0; padding: 2px 9px 2px 3px; border-radius: 7px; background: rgba(205, 214, 244, .08); white-space: nowrap; }
+  .mock .key kbd { min-width: 18px; text-align: center; padding: 0 4px; border-radius: 5px; background: rgba(205, 214, 244, .14); font: 600 11px ui-monospace, Menlo, monospace; }
+  .mock .big { font-size: 20px; font-weight: 650; } .mock .small { font-size: 11.5px; color: var(--o1); }
+  .mock .cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+  .mocknote { font-size: .7rem; opacity: .55; letter-spacing: .04em; text-transform: uppercase; }
+</style>
+</head>
+<body>
+<main class="max-w-6xl mx-auto px-4 sm:px-8 py-10 space-y-12">
+
+  <header class="space-y-4">
+    <p class="text-sm opacity-60">Agentdeck · options for the next round</p>
+    <h1 class="text-4xl font-bold">What should I build next?</h1>
+    <p class="max-w-3xl text-lg opacity-80">You asked about tracking usage and other metrics, and for more ideas. Below are twelve options, each with what you would see, what it costs and whether I would build it. Tick the ones you want and queue them at the bottom. Five are ticked already: that is the set I would build first.</p>
+    <div class="alert alert-soft">
+      <div>
+        <p class="font-semibold">My recommendation: M1, M2, M3, C1 and C2.</p>
+        <p class="text-sm opacity-80">Three small readouts that answer "am I about to run out?" and "how long do my agents wait for me?", plus the two changes that remove the most trips to a terminal tab. The rest are useful to some people and noise to others; I would add them only if you recognise the problem they solve.</p>
+      </div>
+    </div>
+  </header>
+
+  <!-- ───────────── what your logs already say ───────────── -->
+  <section id="numbers" class="space-y-4">
+    <h2 class="text-2xl font-bold">What your own logs already say</h2>
+    <p class="max-w-3xl opacity-80">I computed these today from the logs Claude and Codex already keep on this Mac. Nothing new had to be recorded, which is why most of the tracking options are small.</p>
+    <div class="stats stats-vertical lg:stats-horizontal bg-base-200 border border-base-content/10 w-full">
+      <div class="stat" id="n-handbacks"><div class="stat-title">Hand-backs, last 7 days</div><div class="stat-value">127</div><div class="stat-desc">Claude sessions only</div></div>
+      <div class="stat" id="n-median"><div class="stat-title">Typical wait for you</div><div class="stat-value">13 min</div><div class="stat-desc">median, last 7 days</div></div>
+      <div class="stat" id="n-long"><div class="stat-title">Waited over 30 min</div><div class="stat-value">48</div><div class="stat-desc">of the 127; longest today 7.1 h</div></div>
+      <div class="stat" id="n-limit"><div class="stat-title">Codex weekly limit</div><div class="stat-value">47%</div><div class="stat-desc">used; resets Saturday 22:23</div></div>
+    </div>
+    <p class="text-sm opacity-70 max-w-3xl">How to read the waits: a hand-back is a turn an agent finished on its own, and the wait runs until your next typed message in that session. Nights are included, and Codex sessions are not counted yet, so treat these as rough.</p>
+  </section>
+
+  <form id="pick" data-lavish-question="next-features" class="space-y-12">
+
+  <!-- ───────────── usage and metrics ───────────── -->
+  <section id="metrics" class="space-y-5">
+    <div class="space-y-1">
+      <h2 class="text-2xl font-bold">Usage and metrics</h2>
+      <p class="max-w-3xl opacity-80">Ordered by how much I think each one changes what you do.</p>
+    </div>
+    <div class="grid gap-5 lg:grid-cols-2">
+
+      <article class="opt card card-border bg-base-200" id="M1"><div class="card-body gap-3">
+        <label class="flex items-start gap-3 cursor-pointer">
+          <input type="checkbox" class="checkbox checkbox-primary mt-1" name="items" value="M1" data-label="Limit meter" checked>
+          <span class="flex flex-wrap items-center gap-2"><span class="badge badge-neutral font-mono">M1</span><span class="font-bold text-lg">Limit meter</span><span class="badge badge-success badge-soft">Recommended</span><span class="badge badge-ghost">Small</span></span>
+        </label>
+        <p class="text-sm opacity-85">How much of your weekly Codex limit is gone and when it resets, in the deck header. Quiet while there is plenty left, amber past 75%, one banner at 90%. It stops ten agents from running into the wall together without warning.</p>
+        <div><p class="mocknote mb-1">Mock-up · deck header</p>
+          <div class="mock"><div class="bar"><span class="chip need">◆ <b>2</b> need you</span><span class="chip">○ <b>8</b> working</span><span class="chip new">Codex <b>47%</b><span class="meter"><i style="width:47%"></i></span>resets Sat</span></div></div></div>
+        <p class="text-xs opacity-70"><strong>Data:</strong> Codex writes this into every session log; verified. For Claude I found no local record of how much of the limit is used, so Claude is not covered here, only by C3.</p>
+      </div></article>
+
+      <article class="opt card card-border bg-base-200" id="M2"><div class="card-body gap-3">
+        <label class="flex items-start gap-3 cursor-pointer">
+          <input type="checkbox" class="checkbox checkbox-primary mt-1" name="items" value="M2" data-label="Context fullness per agent" checked>
+          <span class="flex flex-wrap items-center gap-2"><span class="badge badge-neutral font-mono">M2</span><span class="font-bold text-lg">Context fullness per agent</span><span class="badge badge-success badge-soft">Recommended</span><span class="badge badge-ghost">Small</span></span>
+        </label>
+        <p class="text-sm opacity-85">How full each agent's memory is. An agent near the top is about to summarise its own history and lose detail, so that is the moment to have it commit, write a hand-off, or start a fresh one. Shown only when it is worth knowing (past about 60%).</p>
+        <div><p class="mocknote mb-1">Mock-up · two rows</p>
+          <div class="mock">
+            <div class="row"><span class="dot"></span><div class="body"><div class="title">Restart Docker Desktop preserving data</div><div class="line"><span class="mono codex">codex</span> voidreach · The first diagnostic…</div></div><div class="meta mono">68%<span class="meter"><i style="width:68%"></i></span></div></div>
+            <div class="row"><span class="dot"></span><div class="body"><div class="title">Saltline game remake</div><div class="line"><span class="mono claude">claude</span> saltline-remake · summarises soon</div></div><div class="meta mono" style="color:var(--yellow)">91%<span class="meter warn"><i style="width:91%"></i></span></div></div>
+          </div></div>
+        <p class="text-xs opacity-70"><strong>Data:</strong> verified for Codex (your sessions are between 12% and 68% right now). Claude records the token count (635k in one session's last request) but not the size of its window; I need to confirm that before showing a percentage for Claude.</p>
+      </div></article>
+
+      <article class="opt card card-border bg-base-200" id="M3"><div class="card-body gap-3">
+        <label class="flex items-start gap-3 cursor-pointer">
+          <input type="checkbox" class="checkbox checkbox-primary mt-1" name="items" value="M3" data-label="Waiting-on-you scoreboard" checked>
+          <span class="flex flex-wrap items-center gap-2"><span class="badge badge-neutral font-mono">M3</span><span class="font-bold text-lg">Waiting-on-you scoreboard</span><span class="badge badge-success badge-soft">Recommended</span><span class="badge badge-ghost">Small to medium</span></span>
+        </label>
+        <p class="text-sm opacity-85">The one number this whole tool exists to shrink: how long finished work sits before you pick it up. A line at the top of the dashboard with today's typical wait, the longest, and how it compares with your last seven days. It also tells you whether Agentdeck is actually helping.</p>
+        <div><p class="mocknote mb-1">Mock-up · top of the dashboard, with your real numbers</p>
+          <div class="mock"><div class="cols">
+            <div><div class="big">16 min</div><div class="small">typical wait today · 13 min last 7 days</div></div>
+            <div><div class="big">22</div><div class="small">hand-backs today</div></div>
+            <div><div class="big" style="color:var(--yellow)">7.1 h</div><div class="small">longest today</div></div>
+          </div></div></div>
+        <p class="text-xs opacity-70"><strong>Data:</strong> in the Claude logs today; Codex needs the same reading added. I would exclude nights so the number means something.</p>
+      </div></article>
+
+      <article class="opt card card-border bg-base-200" id="M4"><div class="card-body gap-3">
+        <label class="flex items-start gap-3 cursor-pointer">
+          <input type="checkbox" class="checkbox checkbox-primary mt-1" name="items" value="M4" data-label="Token use by project and day">
+          <span class="flex flex-wrap items-center gap-2"><span class="badge badge-neutral font-mono">M4</span><span class="font-bold text-lg">Token use by project and day</span><span class="badge badge-ghost">Optional</span><span class="badge badge-ghost">Medium</span></span>
+        </label>
+        <p class="text-sm opacity-85">A Usage view in the dashboard: tokens today and this week, per project and per agent, with the heaviest agent called out. Good for spotting one agent burning far more than the rest.</p>
+        <p class="text-sm opacity-85"><strong>Why it is not in my first set:</strong> on a subscription, M1 already answers the practical question (will I run out?). This one mostly satisfies curiosity unless you pay per token or often suspect a runaway.</p>
+        <p class="text-xs opacity-70"><strong>Data:</strong> verified for both. For scale: Claude sessions started from <code>~/personal</code> produced about 11 million new tokens today and 48 million over seven days.</p>
+      </div></article>
+
+      <article class="opt card card-border bg-base-200" id="M5"><div class="card-body gap-3">
+        <label class="flex items-start gap-3 cursor-pointer">
+          <input type="checkbox" class="checkbox checkbox-primary mt-1" name="items" value="M5" data-label="Day in review">
+          <span class="flex flex-wrap items-center gap-2"><span class="badge badge-neutral font-mono">M5</span><span class="font-bold text-lg">Day in review</span><span class="badge badge-ghost">Optional</span><span class="badge badge-ghost">Medium</span></span>
+        </label>
+        <p class="text-sm opacity-85">One screen per day: for each project, turns finished, commits made, files changed, and hours agents spent working against hours spent waiting. Useful for a stand-up note or for deciding which project to drop.</p>
+        <p class="text-sm opacity-85"><strong>Why it is not in my first set:</strong> it describes the day after it is over; it does not change what you do next.</p>
+        <p class="text-xs opacity-70"><strong>Data:</strong> all of it is in the logs and in git already.</p>
+      </div></article>
+
+    </div>
+  </section>
+
+  <!-- ───────────── convenience ───────────── -->
+  <section id="convenience" class="space-y-5">
+    <div class="space-y-1">
+      <h2 class="text-2xl font-bold">Convenience</h2>
+      <p class="max-w-3xl opacity-80">Things that remove a trip to a terminal tab or an interruption.</p>
+    </div>
+    <div class="grid gap-5 lg:grid-cols-2">
+
+      <article class="opt card card-border bg-base-200" id="C1"><div class="card-body gap-3">
+        <label class="flex items-start gap-3 cursor-pointer">
+          <input type="checkbox" class="checkbox checkbox-primary mt-1" name="items" value="C1" data-label="Answer a blocked agent from the deck" checked>
+          <span class="flex flex-wrap items-center gap-2"><span class="badge badge-neutral font-mono">C1</span><span class="font-bold text-lg">Answer a blocked agent from the deck</span><span class="badge badge-success badge-soft">Recommended</span><span class="badge badge-ghost">Medium</span></span>
+        </label>
+        <p class="text-sm opacity-85">When an agent stops on a permission or numbered question, the deck shows the terminal's own wording and its choices, and you press 1, 2 or 3. Today a blocked agent always costs a trip to its tab, because replies are deliberately refused while a question is on screen.</p>
+        <div><p class="mocknote mb-1">Mock-up · a blocked row, opened</p>
+          <div class="mock">
+            <div class="row"><span class="dot blk"></span><div class="body"><div class="title">3D browser racing game</div><div class="line"><span class="mono claude">claude</span> racing-game · wants to run a command</div></div><div class="meta mono" style="color:var(--red)">40s</div></div>
+            <div class="ask"><pre>Bash command
+  rm -rf dist &amp;&amp; npm run build
+Do you want to proceed?</pre><span class="key"><kbd>1</kbd>Yes</span><span class="key"><kbd>2</kbd>Yes, and don't ask again</span><span class="key"><kbd>3</kbd>No</span></div>
+          </div></div>
+        <p class="text-xs opacity-70"><strong>Cost and risk:</strong> this presses a key in an agent's terminal, so it gets the same care as replies did: the question shown must still be the one on screen at the moment of the key press, or it refuses. It would go through a Codex review round before you get it.</p>
+      </div></article>
+
+      <article class="opt card card-border bg-base-200" id="C2"><div class="card-body gap-3">
+        <label class="flex items-start gap-3 cursor-pointer">
+          <input type="checkbox" class="checkbox checkbox-primary mt-1" name="items" value="C2" data-label="Snooze and focus" checked>
+          <span class="flex flex-wrap items-center gap-2"><span class="badge badge-neutral font-mono">C2</span><span class="font-bold text-lg">Snooze and focus</span><span class="badge badge-success badge-soft">Recommended</span><span class="badge badge-ghost">Small</span></span>
+        </label>
+        <p class="text-sm opacity-85"><strong>Snooze:</strong> tell one agent "not now" for 30 minutes or an hour. It leaves Needs you, ⌥⇧Space skips it, and it comes back by itself. <strong>Focus:</strong> hold hand-back banners for a set time while you work on one thing; blocked agents still get through, and everything held is waiting in the deck when the time is up.</p>
+        <div><p class="mocknote mb-1">Mock-up · deck header and a snoozed row</p>
+          <div class="mock"><div class="bar" style="margin-bottom:6px"><span class="chip need">◆ <b>1</b> needs you</span><span class="chip new">Focus · <b>25 min</b> left</span></div>
+            <div class="row" style="opacity:.6"><span class="dot you"></span><div class="body"><div class="title">Ocean game production build</div><div class="line"><span class="mono claude">claude</span> sea-game · snoozed, back at 15:40</div></div><div class="meta mono">1h</div></div>
+          </div></div>
+        <p class="text-xs opacity-70"><strong>Why:</strong> eleven agents handing back at their own pace means a banner every few minutes. This is the cheapest way to cut interruptions without missing a blocker.</p>
+      </div></article>
+
+      <article class="opt card card-border bg-base-200" id="C4"><div class="card-body gap-3">
+        <label class="flex items-start gap-3 cursor-pointer">
+          <input type="checkbox" class="checkbox checkbox-primary mt-1" name="items" value="C4" data-label="Stuck alarm">
+          <span class="flex flex-wrap items-center gap-2"><span class="badge badge-neutral font-mono">C4</span><span class="font-bold text-lg">Stuck alarm</span><span class="badge badge-info badge-soft">Worth it</span><span class="badge badge-ghost">Small</span></span>
+        </label>
+        <p class="text-sm opacity-85">A banner when an agent that says it is working has been silent for longer than you allow (say 20 minutes), or a headless run goes far past its usual length. Today that only shows as a small "quiet 17m" note in the row, which you have to notice.</p>
+        <p class="text-xs opacity-70"><strong>Data:</strong> already tracked. The only work is the threshold and the banner.</p>
+      </div></article>
+
+      <article class="opt card card-border bg-base-200" id="C7"><div class="card-body gap-3">
+        <label class="flex items-start gap-3 cursor-pointer">
+          <input type="checkbox" class="checkbox checkbox-primary mt-1" name="items" value="C7" data-label="Same-checkout warning">
+          <span class="flex flex-wrap items-center gap-2"><span class="badge badge-neutral font-mono">C7</span><span class="font-bold text-lg">Same-checkout warning</span><span class="badge badge-info badge-soft">Worth it</span><span class="badge badge-ghost">Small</span></span>
+        </label>
+        <p class="text-sm opacity-85">A mark on the rows, and a line in the new-agent form, when two agents are editing the same folder without separate worktrees, where one can overwrite the other's files.</p>
+        <p class="text-xs opacity-70"><strong>Data:</strong> every agent's folder is already known.</p>
+      </div></article>
+
+      <article class="opt card card-border bg-base-200" id="C3"><div class="card-body gap-3">
+        <label class="flex items-start gap-3 cursor-pointer">
+          <input type="checkbox" class="checkbox checkbox-primary mt-1" name="items" value="C3" data-label="Limit hit, resume at reset">
+          <span class="flex flex-wrap items-center gap-2"><span class="badge badge-neutral font-mono">C3</span><span class="font-bold text-lg">Limit hit, resume at reset</span><span class="badge badge-ghost">Optional</span><span class="badge badge-ghost">Medium</span></span>
+        </label>
+        <p class="text-sm opacity-85">When an agent stops because a usage limit was reached, show that as its own state with the reset time instead of a plain "your turn", and optionally send "continue" for you when the limit resets.</p>
+        <p class="text-sm opacity-85"><strong>Why it is not in my first set:</strong> I found one such stop in your last thirty Claude sessions. If it happens to you more than that suggests, tick it.</p>
+      </div></article>
+
+      <article class="opt card card-border bg-base-200" id="C5"><div class="card-body gap-3">
+        <label class="flex items-start gap-3 cursor-pointer">
+          <input type="checkbox" class="checkbox checkbox-primary mt-1" name="items" value="C5" data-label="Reopen a closed session">
+          <span class="flex flex-wrap items-center gap-2"><span class="badge badge-neutral font-mono">C5</span><span class="font-bold text-lg">Reopen a closed session</span><span class="badge badge-ghost">Optional</span><span class="badge badge-ghost">Medium</span></span>
+        </label>
+        <p class="text-sm opacity-85">A list of sessions that ended recently, per project. Pick one and it resumes in a new tab with its history. For when a tab was closed, WezTerm restarted, or you want yesterday's thread back.</p>
+      </div></article>
+
+      <article class="opt card card-border bg-base-200" id="C6"><div class="card-body gap-3">
+        <label class="flex items-start gap-3 cursor-pointer">
+          <input type="checkbox" class="checkbox checkbox-primary mt-1" name="items" value="C6" data-label="Phone alert when blocked">
+          <span class="flex flex-wrap items-center gap-2"><span class="badge badge-neutral font-mono">C6</span><span class="font-bold text-lg">Phone alert when blocked</span><span class="badge badge-warning badge-soft">Your call</span><span class="badge badge-ghost">Small to medium</span></span>
+        </label>
+        <p class="text-sm opacity-85">A push to your phone when an agent has been blocked for more than a few minutes and you are away from the Mac. Your longest wait today was seven hours.</p>
+        <p class="text-xs opacity-70"><strong>The catch:</strong> it needs an outside service (ntfy or Pushover), and the agent's title would leave this machine. Everything else on this page stays local, so I will not build this unless you pick it.</p>
+      </div></article>
+
+    </div>
+  </section>
+
+  <!-- ───────────── leaving out ───────────── -->
+  <section id="skip" class="space-y-3">
+    <h2 class="text-2xl font-bold">What I would leave out</h2>
+    <p class="max-w-3xl opacity-80">You asked for no bloat. These came up in the brainstorm and did not earn a place. Tell me if you disagree with any of them.</p>
+    <ul class="list bg-base-200 rounded-box border border-base-content/10">
+      <li class="list-row" id="skip-charts"><div><strong>Charts and trends over weeks.</strong> <span class="opacity-75">Nice to look at, and they need storage and upkeep. The three readouts above answer the questions a chart would.</span></div></li>
+      <li class="list-row" id="skip-dollars"><div><strong>Cost in dollars.</strong> <span class="opacity-75">You are on subscriptions, so a dollar figure would be an invented number.</span></div></li>
+      <li class="list-row" id="skip-broadcast"><div><strong>Send one message to many agents.</strong> <span class="opacity-75">Rare, and the worst kind of mistake to make quickly.</span></div></li>
+      <li class="list-row" id="skip-rules"><div><strong>Automatic reply rules ("when it finishes, send X").</strong> <span class="opacity-75">The queued reply already covers the case where you know the next step.</span></div></li>
+      <li class="list-row" id="skip-notes"><div><strong>Notes and prompt templates.</strong> <span class="opacity-75">The Conversation tab already shows what you last asked; a template library is a second place to maintain.</span></div></li>
+    </ul>
+  </section>
+
+  <!-- ───────────── submit ───────────── -->
+  <section id="send" class="space-y-3">
+    <div class="card card-border bg-base-200"><div class="card-body gap-3">
+      <h2 class="card-title">Your pick</h2>
+      <p class="text-sm"><span class="opacity-70">Ticked now:</span> <strong id="chosen"></strong></p>
+      <label class="text-sm opacity-80" for="extra">Anything else you want, or a change to one of these (optional)</label>
+      <textarea id="extra" name="extra" rows="2" class="textarea w-full" placeholder="e.g. M2 but only for Codex; or an idea that is not on this page"></textarea>
+      <div class="flex flex-wrap items-center gap-3">
+        <button type="submit" class="btn btn-primary">Queue this pick</button>
+        <span id="queued" class="text-sm opacity-80" role="status" aria-live="polite"></span>
+      </div>
+      <p class="text-xs opacity-60">Queuing adds your pick to the conversation panel; it reaches me when you press Send to Agent. You can also select any text on this page and comment on it.</p>
+    </div></div>
+  </section>
+
+  </form>
+</main>
+<script>
+  const form = document.getElementById('pick');
+  const picked = () => [...form.querySelectorAll('input[name=items]:checked')].map((i) => ({ id: i.value, label: i.dataset.label, disposition: 'build' }));
+  const show = () => { const p = picked(); document.getElementById('chosen').textContent = p.length ? p.map((i) => i.id).join(', ') : 'nothing'; };
+  form.addEventListener('change', show); show();
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const items = picked(), extra = document.getElementById('extra').value.trim(), ids = items.map((i) => i.id).join(', ') || 'none of them';
+    const text = 'Build next: ' + ids + (extra ? '. Also: ' + extra : '');
+    const status = document.getElementById('queued');
+    if (!window.lavish) { status.textContent = 'This page is open without Lavish. Tell Claude: "' + text + '"'; return; }
+    window.lavish.queuePrompt('Build every selected item and report on each one by its ID. ' + text, { tag: 'tracked-batch', text, element: form, queueKey: 'next-features', data: { items, extra } });
+    status.textContent = 'Queued: ' + ids + '. Press Send to Agent to deliver it.';
+  });
+</script>
+</body>
+</html>
