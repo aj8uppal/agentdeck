@@ -4,7 +4,8 @@
  *   Pi closes its session file between writes and several pi can share a folder, so nothing outside the process can
  *   tell which session file belongs to which pid.
  * - inbox: `ag send` drops <pid>.inbox; it becomes a user message (queued as a follow-up while pi works), so a reply
- *   never goes through the terminal and never touches a draft in the editor. The outcome goes to <pid>.result.
+ *   never goes through the terminal and never touches a draft in the editor. `ag rename` uses it to name the session.
+ *   The outcome goes to <pid>.result.
  * install.sh links this into ~/.pi/agent/extensions/.
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -96,8 +97,12 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 		try {
-			const { text, submit, sid } = JSON.parse(readFileSync(taken, "utf8")) as { text: string; submit: boolean; sid?: string };
+			const { text, submit, sid, rename } = JSON.parse(readFileSync(taken, "utf8")) as { text: string; submit: boolean; sid?: string; rename?: string };
 			if (sid && sid !== ctx.sessionManager.getSessionId()) return answer({ ok: false, why: "that is a different session now; nothing was sent" });
+			if (rename) {
+				pi.setSessionName(rename); // autoname treats it like a /name of yours and keeps it
+				return answer({ ok: true });
+			}
 			if (dialogs.length) return answer({ ok: false, why: "it is waiting on a dialog; drop in and answer it there" });
 			if (!submit) ctx.ui.pasteToEditor(text);
 			else if (ctx.isIdle()) pi.sendUserMessage(text);

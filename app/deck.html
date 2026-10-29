@@ -91,6 +91,13 @@
   #head .where { font: 11.5px var(--mono); color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #note { margin: 0 20px 8px; padding: 8px 11px; border-radius: 8px; font-size: 12.5px; background: rgba(249, 226, 175, .1); color: var(--yellow); flex: none; }
   #note.blocked { background: rgba(243, 139, 168, .13); color: var(--red); }
+  #recap { margin: 0 20px 8px; padding: 9px 12px; border-radius: 8px; border-left: 2px solid var(--c); background: rgba(205, 214, 244, .05);
+    font-size: 13px; line-height: 1.45; color: var(--text); flex: none; user-select: text; cursor: auto; }
+  #recap.stale { color: var(--sub); }
+  #head h1 { cursor: text; }
+  #head h1[hidden], #titleEdit[hidden] { display: none; }
+  #titleEdit { display: block; width: calc(100% + 12px); margin: 6px -6px 2px; padding: 0 5px; border-radius: 6px; border: 1px solid rgba(203, 166, 247, .5);
+    background: rgba(17, 17, 27, .6); color: var(--text); font: 600 18px/1.25 var(--ui); letter-spacing: -.01em; outline: none; }
   #scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 20px 12px; user-select: text; cursor: auto; }
   .label { margin: 12px 0 5px; font: 600 11px var(--ui); letter-spacing: .02em; color: var(--o1); }
   #asked { padding: 9px 12px; border-radius: 9px; background: rgba(205, 214, 244, .05); color: var(--sub); font-size: 12.5px;
@@ -249,9 +256,10 @@
           <button class="btn" id="termBtn" type="button" aria-pressed="false">Terminal<kbd>⌘T</kbd></button>
           <button class="btn" id="openBtn" type="button">Drop in<kbd>↩</kbd></button>
         </div>
-        <h1></h1><div class="where"></div>
+        <h1 title="Click to rename"></h1><input id="titleEdit" hidden spellcheck="false" autocomplete="off" aria-label="Rename this agent"><div class="where"></div>
       </div>
       <div id="note" hidden></div>
+      <div id="recap" hidden role="status"></div>
       <div id="tabs" role="tablist">
         <button class="btn" type="button" role="tab" data-tab="talk">Conversation</button>
         <button class="btn" type="button" role="tab" data-tab="changes">Changes</button>
@@ -302,6 +310,7 @@ let tab = 'talk', talks = {}, diffOf = {}, events = [], looked = 0;      // dash
 let seq = 0, slots = [], launching = 0, patience = 20000, changed = {};  // request numbers; frozen ⌘1–9; git status of the selected agent
 let creating = false, projects = [], commands = { claude: 'claude', codex: 'codex', pi: 'pi' }, kind = 'claude', pick = 0;
 let staleFor = 0, screens = {}, peek = false, bodySig = '', asksOpen = false;
+let recaps = {};  // id -> {want, asked, key, text, error}: a paragraph on where each agent stands, written by `ag recap`
 
 function el(tag, parent, text, cls) {
   const e = document.createElement(tag);
@@ -450,7 +459,7 @@ function drawView() {
   el('i', el('span', st, null, 'glyph')); st.className = 'state ' + r.state;
   st.append(LABEL[r.state] + (attention(r) && !isNew(r) ? ' · seen' : ''));
   $('head').querySelector('h1').textContent = r.title;
-  $('head').querySelector('.where').textContent = [r.kind === 'exec' ? 'headless codex' : r.kind, r.proj + (r.branch ? ' ⎇ ' + r.branch : ''), place(r), r.subs ? '+' + r.subs + ' subagents' : '', timed(r), quiet(r), spent(r.cost)].filter(Boolean).join(' · ');
+  $('head').querySelector('.where').textContent = [r.kind === 'exec' ? 'headless codex' : r.kind, spent(r.cost), r.proj + (r.branch ? ' ⎇ ' + r.branch : ''), place(r), r.subs ? '+' + r.subs + ' subagents' : '', timed(r), quiet(r)].filter(Boolean).join(' · ');
   $('openBtn').hidden = $('termBtn').hidden = r.pane == null;
   $('termBtn').setAttribute('aria-pressed', peek);
   $('note').hidden = !r.note;
@@ -471,6 +480,7 @@ function drawView() {
     if (r.cut) el('p', $('said'), 'Cut at 4,000 characters. Drop in for the rest.', 'cut');
     $('scroll').scrollTop = same ? y : 0;
   }
+  drawRecap(r);
   drawScreen(r);
   drawChanges(r);
   drawTalk(r);
@@ -514,7 +524,7 @@ function syncComposer(r) {
   if (!why && !busy && failed.id === id) $('to').textContent = failed.reason;
   else if (why) $('to').textContent = r.state === 'blocked' && r.pane != null ? '' : why;
   else { $('to').append(busy ? 'Sending to ' : held ? 'Queued for ' : later ? 'Queue for ' : 'Reply to '); el('b', $('to'), r.title); if (held || later) $('to').append(': sent the moment it finishes its turn'); }
-  $('r').placeholder = later ? 'It is busy. Write now; it is sent when this turn ends' : 'Pasted into its prompt and submitted, without leaving this window';
+  $('r').placeholder = later ? 'It is busy. Write now; it is sent when this turn ends' : r.kind === 'pi' ? 'Sent to it as your next message, without leaving this window' : 'Pasted into its prompt and submitted, without leaving this window';
   $('sendBtn').disabled = !!why || busy || (!held && !$('r').value.trim());
   $('sendBtn').firstChild.textContent = busy ? 'Sending' : held ? 'Cancel' : later ? 'Queue' : 'Send';
   $('sendBtn').classList.toggle('plain', held);
@@ -556,7 +566,8 @@ function draw() {
 
 function select(id) {
   if (id !== sel) diffOf = {};
-  sel = id; draw(); wantScreen(); wantChanges(); wantTalk();
+  if (id !== sel) editTitle(false);
+  sel = id; draw(); wantScreen(); wantChanges(); wantTalk(); wantRecap();
   $('list').querySelector('.sel')?.scrollIntoView({ block: 'nearest' });
 }
 function move(d) {
@@ -658,6 +669,32 @@ function drawDiff(r) {
     el('span', d, line + '\n', line.startsWith('+') && !line.startsWith('+++') ? 'add' : line.startsWith('-') && !line.startsWith('---') ? 'del' : line.startsWith('@@') ? 'hunk' : '');
   }
 }
+/* Where it stands, in a paragraph: asked for whenever its state or your last prompt changes, kept until then. */
+const recapKey = (r) => [r.sid, r.state, r.since, r.asked, r.note].join('\u0001');
+function wantRecap() {
+  const r = current();
+  if (!open || mode === 'dock' || creating || !r) return;
+  const key = recapKey(r), have = recaps[r.id];
+  if (have && (have.key === key || (have.want === key && Date.now() - have.asked < 120000))) return;
+  recaps[r.id] = { ...have, want: key, asked: Date.now() };
+  post({ cmd: 'recap', id: r.id });
+  drawRecap(r);
+}
+function drawRecap(r) {
+  const box = $('recap'), have = recaps[r.id], fresh = !!have && have.key === recapKey(r);
+  box.hidden = !have;
+  if (!have) return;
+  box.textContent = have.text || (fresh && have.error ? 'No summary: ' + have.error : 'Summarising where this stands…');
+  box.classList.toggle('stale', !fresh || !have.text);  // an older paragraph stays readable, dimmed, until the new one lands
+}
+/* Click the title to rename an agent: ↩ keeps it, esc or clicking away does not. Keys here never reach the deck. */
+function editTitle(on) {
+  const r = current(), box = $('titleEdit'), h1 = $('head').querySelector('h1');
+  box.hidden = !on || !r; h1.hidden = !box.hidden;
+  if (box.hidden) return;
+  box.value = r.title; box.dataset.id = r.id; box.focus(); box.select();
+}
+
 /* The conversation so far: each thing you asked and the answer it ended on. */
 function wantTalk() {
   const r = current();
@@ -804,6 +841,17 @@ $('newBtn').onclick = () => openNew(!creating);
 $('boardBtn').onclick = () => post({ cmd: 'board', on: true });
 for (const b of $('tabs').children) b.onclick = () => setTab(b.dataset.tab);
 $('nGo').onclick = start;
+$('head').querySelector('h1').onclick = () => { if (!getSelection().toString()) editTitle(true); };
+$('titleEdit').addEventListener('keydown', (e) => {
+  e.stopPropagation();
+  if (e.key === 'Escape') { editTitle(false); $('q').focus(); }
+  if (e.key !== 'Enter' || e.isComposing) return;
+  e.preventDefault();
+  const id = $('titleEdit').dataset.id, r = rows.find((x) => x.id === id), name = $('titleEdit').value.trim();
+  editTitle(false); $('q').focus();
+  if (r && name !== r.title) { post({ cmd: 'rename', id, name }); toast('Renaming…'); }
+});
+$('titleEdit').addEventListener('blur', () => editTitle(false));
 $('nClaude').onclick = () => setKind('claude'); $('nCodex').onclick = () => setKind('codex'); $('nPi').onclick = () => setKind('pi');
 $('nProj').addEventListener('input', () => { pick = 0; drawNew(); });
 $('asked').onclick = () => { if (!getSelection().toString()) { asksOpen = !asksOpen; bodySig = ''; drawView(); } };
@@ -821,7 +869,7 @@ window.addEventListener('mouseup', (e) => {
   if (!d || d.moved) return d && post({ cmd: 'moved' });
   if (mode === 'pill') post({ cmd: 'fold', on: false }); else if (mode === 'dock') post({ cmd: 'expand', id: sel });
 });
-setInterval(() => { wantScreen(); wantChanges(); wantTalk(); }, 2000);
+setInterval(() => { wantScreen(); wantChanges(); wantTalk(); wantRecap(); }, 2000);
 setInterval(() => { if (open && rows.length) { drawList(); drawView(); } }, 20000);  // keep the ages honest between updates
 
 window.deck = {
@@ -861,11 +909,17 @@ window.deck = {
     }
     if (m === 'palette' || m === 'board') { reconcile(); renumber(); }
     draw();
-    if (m === 'palette' || m === 'board') { grow(); $('q').focus(); wantScreen(); wantChanges(); wantTalk(); }
+    if (m === 'palette' || m === 'board') { grow(); $('q').focus(); wantScreen(); wantChanges(); wantTalk(); wantRecap(); }
     if (m === 'board') for (const b of $('tabs').children) b.setAttribute('aria-selected', b.dataset.tab === tab);
     $('list').querySelector('.sel')?.scrollIntoView({ block: 'nearest' });
   },
-  hidden() { open = false; },
+  hidden() { open = false; editTitle(false); },
+  recap(d) {
+    const have = recaps[d.id] || {};
+    recaps[d.id] = { ...have, key: have.want, text: d.text || null, error: d.error || null };
+    const r = current(); if (r && r.id === d.id) drawRecap(r);
+  },
+  renamed(id, ok, why) { toast(ok ? 'Renamed' : why, !ok); },
   /* the app's answer to a send */
   sent(id, ok, reason, req) {
     const p = pending;

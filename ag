@@ -15,6 +15,10 @@
                 (ID as in `ag stream`, e.g. claude-1234 or pi-5678; --no-submit pastes without Return; --sid S also
                 requires that agent to still be session S)
   ag talk ID    the last few exchanges with that agent, as JSON (the dashboard's conversation view)
+  ag recap ID   one paragraph on where that agent stands and what it needs from you, as JSON; written by a small
+                model through `pi -p`, and kept until its state or your last prompt changes
+  ag rename ID [NAME]   what the deck calls that agent: a pi session is renamed itself (its tab too); for the
+                others the name is kept here. No NAME goes back to the agent's own title.
   ag check      self-test
 
 BLOCKED = stopped mid-task on a dialog or question. your turn = finished, waiting for your next prompt.
@@ -27,6 +31,14 @@ import calendar, glob, json, os, re, shutil, subprocess, sys, tempfile, time
 HOME = os.path.expanduser('~')
 SEEN = os.path.join(HOME, '.cache', 'ag-seen.json')
 PI_STATUS = os.path.join(HOME, '.cache', 'agentdeck', 'pi')  # written by pi/agentdeck.ts
+NAMES = os.path.join(HOME, '.cache', 'agentdeck', 'names.json')  # session id -> the name you gave it in the deck
+RECAPS = os.path.join(HOME, '.cache', 'agentdeck', 'recaps')
+RECAP_MODEL = os.environ.get('AGENTDECK_RECAP_MODEL', 'claude-sonnet-5')
+RECAP_PROMPT = '''You write the status line an engineer reads to get back into one of several coding-agent sessions.
+Write 2 or 3 short sentences, 60 words at most, as plain text: no markdown, no preamble, no quotes around it.
+First what was just done, naming only the one or two PRs, tickets or numbers that matter most.
+Then what happens next: what the agent is doing now, or exactly what it is waiting on from the reader ("you").
+Use "we" for the reader and the agent together. Never use an em dash. Use only facts from the transcript.'''
 RANK = {'blocked': 0, 'yours': 1, 'working': 2, 'done': 3}
 LOOK = {'blocked': ('1;31', '● BLOCKED'), 'yours': ('33', '◆ your turn'), 'working': ('32', '⠿ working'),
         'done': ('34', '✓ finished')}
@@ -474,6 +486,9 @@ def snapshot(listed=None):
             asked = memo(('screen', pane), int(time.time() // 10), lambda: dialog(sh(wezterm(procs), 'cli', 'get-text', '--pane-id', pane, timeout=2)))
             if asked:  # each new dialog gets its own "since", so marking one as seen never hides the next
                 r.update(state='blocked', note=asked, since=os.stat(r['log']).st_mtime if 'log' in r else memo(('asked', pane, asked), 0, time.time))
+    names = memo('names', sig(NAMES), lambda: load(open(NAMES).read()) if os.path.exists(NAMES) else {})
+    for r in rows:
+        r['title'] = names.get(r.get('sid') or '\0') or r['title']
     rows.sort(key=lambda r: (RANK[r['state']], r['kind'] == 'exec', r['since'] or 0))
     return rows
 
@@ -617,6 +632,11 @@ def send_pi(row, text, submit, sid):
     While it works the reply is queued as a follow-up; a dialog it is waiting on must be answered in the tab."""
     if row['state'] == 'blocked':
         sys.exit('it is waiting on a dialog; drop in and answer it there')
+    pi_inbox(row, dict(text=text, submit=submit, sid=sid))
+
+
+def pi_inbox(row, request):
+    """Give pi/agentdeck.ts one request and wait for its answer; exits with the reason if it refuses or never takes it."""
     inbox, result = ('%s/%d.%s' % (PI_STATUS, row['pid'], end) for end in ('inbox', 'result'))
     if os.path.exists(inbox):
         sys.exit('pi has not picked up the last reply yet; nothing was sent')
@@ -625,7 +645,7 @@ def send_pi(row, text, submit, sid):
     except FileNotFoundError:
         pass
     with open(inbox + '.tmp', 'w') as f:
-        json.dump(dict(text=text, submit=submit, sid=sid), f)
+        json.dump(request, f)
     os.rename(inbox + '.tmp', inbox)
     for _ in range(40):
         time.sleep(0.1)
@@ -777,18 +797,110 @@ def pi_talk(path, limit):
     return turns[-limit:]
 
 
+def turns_of(row, limit):
+    if row and row['kind'] == 'claude':
+        logs = glob.glob('%s/.claude/projects/*/%s.jsonl' % (HOME, row.get('sid')))
+        return claude_talk(logs[0], limit) if logs else []
+    if row and row['kind'] == 'pi':
+        return pi_talk(row['file'], limit) if row['file'] else []
+    if row and row.get('log'):
+        return codex_talk(row['log'], limit)
+    return []
+
+
 def talk(who, limit=8):
     """`ag talk ID`: the recent conversation with one agent, as JSON, for the dashboard."""
     row = next((r for r in snapshot([{}]) if ident(r) == who), None)  # no need to ask WezTerm about panes for this
-    turns = []
-    if row and row['kind'] == 'claude':
-        logs = glob.glob('%s/.claude/projects/*/%s.jsonl' % (HOME, row.get('sid')))
-        turns = claude_talk(logs[0], limit) if logs else []
-    elif row and row['kind'] == 'pi':
-        turns = pi_talk(row['file'], limit) if row['file'] else []
-    elif row and row.get('log'):
-        turns = codex_talk(row['log'], limit)
-    print(json.dumps({'id': who, 'turns': turns}))
+    print(json.dumps({'id': who, 'turns': turns_of(row, limit)}))
+
+
+def pi_print():
+    """`pi -p` with nothing loaded but the provider packages from your pi settings: no tools, skills, context files or
+    other extensions, so it is quick and cannot touch anything. Run through a login shell, for the terminal's PATH and
+    credentials (this is also called from the app, which has neither)."""
+    agent = os.path.join(HOME, '.pi', 'agent')
+    try:
+        with open(os.path.join(agent, 'settings.json')) as f:
+            packages = json.load(f).get('packages', [])
+    except (OSError, ValueError):
+        packages = []
+    extensions = []
+    for package in packages:
+        if isinstance(package, str) and ':' not in package:  # local folders; npm: and git: packages are left out
+            root = os.path.normpath(os.path.join(agent, os.path.expanduser(package)))
+            try:
+                with open(os.path.join(root, 'package.json')) as f:
+                    extensions += [os.path.join(root, e) for e in json.load(f).get('pi', {}).get('extensions', [])]
+            except (OSError, ValueError):
+                pass
+    return (['/bin/zsh', '-lic', 'exec "$@"', 'zsh', 'pi', '-p', '--no-session', '--no-tools', '--no-extensions'] +
+            [a for e in extensions for a in ('-e', e)] +
+            ['--no-skills', '--no-prompt-templates', '--no-themes', '--no-context-files', '--offline',
+             '--model', RECAP_MODEL, '--thinking', 'off', '--system-prompt', RECAP_PROMPT])
+
+
+def recap(who):
+    """`ag recap ID`: {"id", "text"} or {"id", "error"}."""
+    row = next((r for r in snapshot([{}]) if ident(r) == who), None)
+    if not row:
+        return print(json.dumps({'id': who, 'error': 'that agent is no longer running'}))
+    key = [row.get('sid'), row['state'], row['since'], row.get('asked'), row['note'], RECAP_MODEL, RECAP_PROMPT]
+    path = os.path.join(RECAPS, re.sub(r'\W', '_', who) + '.json')
+    try:
+        with open(path) as f:
+            kept = json.load(f)
+        if kept.get('key') == key:
+            return print(json.dumps({'id': who, 'text': kept['text']}))
+    except (OSError, ValueError):
+        pass
+    turns = turns_of(row, 4)
+    lines = ['%s agent in %s%s. Now: %s%s.' % (row['kind'], row['proj'], ' on branch ' + row['branch'] if row.get('branch') else '',
+                                              LOOK[row['state']][1].split(' ', 1)[1], ' (' + row['note'] + ')' if row['note'] else ''),
+             'Session title: ' + row['title']]
+    for t in turns:
+        lines += ['', 'You asked: ' + t['you'][:1500]]
+        work = ' (%d tool calls; ran: %s)' % (t['steps'], '; '.join(t['ran'][-5:])[:400]) if t.get('steps') else ''
+        lines += ['It answered%s: %s' % (work, (t['said'] or '(no answer yet)')[:2500])]
+    if not turns:
+        lines += ['', 'You asked: ' + row['prompt'][:1500], 'Latest from it: ' + row['said'][:2500]]
+    if row['state'] == 'working' and row.get('doing'):
+        lines += ['', 'Running right now: ' + row['doing']]
+    try:
+        done = subprocess.run(pi_print(), input='\n'.join(lines), capture_output=True, text=True, timeout=90, cwd=tempfile.gettempdir())
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return print(json.dumps({'id': who, 'error': 'pi did not answer: %s' % error}))
+    text = ' '.join(done.stdout.split())
+    if done.returncode or not text:
+        return print(json.dumps({'id': who, 'error': (done.stderr.strip().splitlines() or ['pi gave no answer'])[-1][:300]}))
+    os.makedirs(RECAPS, exist_ok=True)
+    with open(path + '.tmp', 'w') as f:
+        json.dump({'key': key, 'text': text}, f)
+    os.rename(path + '.tmp', path)
+    print(json.dumps({'id': who, 'text': text}))
+
+
+def rename(who, name):
+    """`ag rename ID [NAME]`."""
+    name = ' '.join(name.split())[:80]
+    row = next((r for r in snapshot([{}]) if ident(r) == who), None)
+    if not row or not row.get('sid'):
+        sys.exit('that agent is no longer running' if not row else 'that agent has no session to name yet')
+    if row['kind'] == 'pi':
+        if not name:
+            sys.exit('a pi session needs a name; /autoname in its tab writes one')
+        pi_inbox(row, dict(rename=name, sid=row['sid']))
+    try:
+        with open(NAMES) as f:
+            names = json.load(f)
+    except (OSError, ValueError):
+        names = {}
+    names.pop(row['sid'], None)  # a pi session carries its own name; the others keep theirs here
+    if name and row['kind'] != 'pi':
+        names[row['sid']] = name
+    os.makedirs(os.path.dirname(NAMES), exist_ok=True)
+    with open(NAMES + '.tmp', 'w') as f:
+        json.dump(names, f)
+    os.rename(NAMES + '.tmp', NAMES)
 
 
 def pick_next(rows, focused):
@@ -888,6 +1000,10 @@ def main(argv):
         return stream()
     if cmd == 'talk':
         return talk(''.join(argv[1:2]))
+    if cmd == 'recap':
+        return recap(''.join(argv[1:2]))
+    if cmd == 'rename':
+        return rename(''.join(argv[1:2]), ' '.join(argv[2:]))
     if cmd == 'send':  # the text is read first, so the state check below is as late as it can be
         sid = argv[argv.index('--sid') + 1] if '--sid' in argv[:-1] else ''
         return send(''.join(argv[1:2]), sys.stdin.read(), '--no-submit' not in argv, sid)

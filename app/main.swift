@@ -113,6 +113,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, WKScriptMess
     var moving = false  // the page is being moved between the panel and the dashboard window
     var known = Set<String>()  // every agent seen since launch, so one that drops out of a snapshot is not "started" twice
     var talking = false
+    var recapping = Set<String>()  // agents whose recap is being written: one at a time each, several agents at once
     var ticks = 0
     /// What happened (hand-backs, blocks, runs starting and ending), oldest first; kept across restarts.
     let eventsFile = NSHomeDirectory() + "/Library/Application Support/Agentdeck/events.json"
@@ -632,6 +633,16 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, WKScriptMess
         case "changes": if let row = row(id) { readChanges(row) }
         case "board": if m["on"] as? Bool ?? !boardOpen { openBoard() } else { board?.close() }
         case "talk": if let row = row(id) { readTalk(row) }
+        case "recap": if let row = row(id) { readRecap(row) }
+        case "rename":
+            if let id, row(id) != nil, let name = m["name"] as? String {
+                cli.async {
+                    let result = run(self.ag, ["rename", id, name], timeout: 8)
+                    log("rename \(id): \(result.ok) \(result.err)")
+                    let why = result.err.trimmingCharacters(in: .whitespacesAndNewlines)
+                    DispatchQueue.main.async { self.js("deck.renamed(\(literal(id)), \(result.ok), \(literal(result.ok ? "" : why.isEmpty ? "Could not rename it" : why)))") }
+                }
+            }
         case "diff": if let row = row(id), let file = m["file"] as? String { readDiff(row, file, untracked: m["untracked"] as? Bool ?? false) }
         case "screen": if let row = row(id) { readScreen(row) }
         case "open": if let s = m["url"] as? String { open(s) }
@@ -724,6 +735,20 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, WKScriptMess
             log("launch \(kind) in \(dir): \(started.ok) \(started.err)")
             let name = URL(fileURLWithPath: dir).lastPathComponent
             DispatchQueue.main.async { answer(started.ok, started.ok ? "Started \(kind) in \(name)" : "Could not start it: " + started.err) }
+        }
+    }
+
+    /// Where an agent stands, in a paragraph (`ag recap` asks a small model, and keeps the answer until things change).
+    func readRecap(_ row: [String: Any]) {
+        guard let id = row["id"] as? String, !recapping.contains(id) else { return }
+        recapping.insert(id)
+        DispatchQueue.global(qos: .utility).async {
+            let result = run(self.ag, ["recap", id], timeout: 100)
+            DispatchQueue.main.async {
+                self.recapping.remove(id)
+                let answer = result.ok && result.out.hasPrefix("{") ? result.out : "{\"id\": \(literal(id)), \"error\": \"no recap\"}"
+                self.js("deck.recap(\(answer))")  // ag prints ASCII-only JSON
+            }
         }
     }
 

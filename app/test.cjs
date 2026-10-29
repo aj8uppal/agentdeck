@@ -300,6 +300,31 @@ const backdrop = `html{background:
   await page.keyboard.press('Escape');
   if (shots) { await page.keyboard.press('Meta+n'); await page.fill('#nProj', 'h'); await page.screenshot({ path: shots + '/deck-new.png' }); await page.keyboard.press('Escape'); }
 
+  // where it stands: asked for on select, a placeholder until it lands, then the paragraph; not asked again while unchanged
+  await page.evaluate((a) => deck.update({ rows: a.map((r) => (r.id === 'y2' ? { ...r, asked: 12345 } : r)), projects: [] }, {}), rows());  // you wrote to it since
+  await msgs(page);
+  await page.evaluate(() => document.getElementById('row-y2').click());
+  assert.deepEqual((await msgs(page, 'recap')).map((m) => m.id), ['y2']);
+  assert.equal(await page.textContent('#recap'), 'Summarising where this stands…');
+  await page.evaluate(() => deck.recap({ id: 'y2', text: 'We shipped #84159. Waiting on you to push.' }));
+  assert.equal(await page.textContent('#recap'), 'We shipped #84159. Waiting on you to push.');
+  await page.evaluate(() => document.getElementById('row-y1').click());
+  await page.evaluate(() => document.getElementById('row-y2').click());
+  assert.ok(!(await msgs(page, 'recap')).some((m) => m.id === 'y2'), 'unchanged since its recap: not asked again');
+  assert.equal(await page.textContent('#recap'), 'We shipped #84159. Waiting on you to push.');
+
+  // rename: click the title, type, ↩; the deck's own keys (↩ = drop in) never fire from the box
+  await page.click('#head h1');
+  assert.equal(await page.inputValue('#titleEdit'), 'Empire game with Catan aesthetic');
+  await page.fill('#titleEdit', 'Catan empire game');
+  await page.press('#titleEdit', 'Enter');
+  const renaming = await msgs(page);
+  assert.deepEqual(renaming.filter((m) => m.cmd === 'rename'), [{ cmd: 'rename', id: 'y2', name: 'Catan empire game' }]);
+  assert.equal(renaming.filter((m) => m.cmd === 'jump').length, 0, '↩ in the rename box must not drop in');
+  assert.equal(await page.isHidden('#titleEdit'), true);
+  await page.click('#head h1'); await page.press('#titleEdit', 'Escape');
+  assert.deepEqual((await msgs(page)).filter((m) => m.cmd === 'rename' || m.cmd === 'hide'), [], 'esc cancels the rename and nothing else');
+
   // a headless run has no tab
   await page.evaluate(() => document.getElementById('row-w2').click());
   await page.click('#q'); await page.keyboard.press('Enter');
