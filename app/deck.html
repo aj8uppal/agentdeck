@@ -322,6 +322,7 @@ const quiet = (r) => r.state === 'working' && r.moved && Date.now() / 1000 - r.m
 const workers = (r) => r.kind === 'claude' && r.note ? rows.filter((x) => x.kind === 'exec' && x.state === 'working' && x.proj === r.proj).length : 0;
 const noted = (r) => r.note + (workers(r) ? ' · ' + workers(r) + ' headless runs in this project still working' : '');
 const stage = (r) => r.state === 'working' ? [quiet(r), r.doing || first(r.said)].filter(Boolean).join(' · ') : [r.note && noted(r), first(r.said)].filter(Boolean).join(' · ');
+const spent = (dollars) => dollars ? '$' + dollars.toFixed(2) : '';  // pi reports what its session has cost so far
 const place = (r) => r.tab ? (r.window ? 'window ' + r.window + ' tab ' + r.tab : 'tab ' + r.tab) : '';
 const attention = (r) => r.state === 'blocked' || r.state === 'yours';
 const isNew = (r) => attention(r) && seen[r.id] !== r.since;   // not yet dealt with since it last stopped
@@ -430,7 +431,7 @@ function drawList() {
     section('Working', L.groups.reduce((n, [, g]) => n + g.length, 0));
     for (const [proj, g] of L.groups) {
       const grouped = g.length > 1 || g[0].kind === 'exec';  // a lone agent carries its project on its own line
-      if (grouped) el('div', list, proj, 'proj-head');
+      if (grouped) el('div', list, [proj, spent(g.reduce((n, r) => n + (r.cost || 0), 0))].filter(Boolean).join(' · '), 'proj-head');
       g.forEach((r) => add(r, grouped));
     }
   }
@@ -449,7 +450,7 @@ function drawView() {
   el('i', el('span', st, null, 'glyph')); st.className = 'state ' + r.state;
   st.append(LABEL[r.state] + (attention(r) && !isNew(r) ? ' · seen' : ''));
   $('head').querySelector('h1').textContent = r.title;
-  $('head').querySelector('.where').textContent = [r.kind === 'exec' ? 'headless codex' : r.kind, r.proj + (r.branch ? ' ⎇ ' + r.branch : ''), place(r), r.subs ? '+' + r.subs + ' subagents' : '', timed(r), quiet(r)].filter(Boolean).join(' · ');
+  $('head').querySelector('.where').textContent = [r.kind === 'exec' ? 'headless codex' : r.kind, r.proj + (r.branch ? ' ⎇ ' + r.branch : ''), place(r), r.subs ? '+' + r.subs + ' subagents' : '', timed(r), quiet(r), spent(r.cost)].filter(Boolean).join(' · ');
   $('openBtn').hidden = $('termBtn').hidden = r.pane == null;
   $('termBtn').setAttribute('aria-pressed', peek);
   $('note').hidden = !r.note;
@@ -501,7 +502,7 @@ function syncComposer(r) {
   }
   if (!r) return;
   const why = staleFor ? 'Agent status is out of date, so replies are off until it is fresh again.'
-    : r.pane == null ? (r.state === 'done' ? 'This headless run has finished.' : r.kind === 'exec' ? 'Headless run: there is no terminal to reply to.' : 'Not in a WezTerm tab, so there is nowhere to send a reply.')
+    : r.pane == null && r.kind !== 'pi' ? (r.state === 'done' ? 'This headless run has finished.' : r.kind === 'exec' ? 'Headless run: there is no terminal to reply to.' : 'Not in a WezTerm tab, so there is nowhere to send a reply.')
     : r.state === 'blocked' && !queued[id] ? 'Blocked on a dialog. Press ↩ to drop in and answer it there.' : '';
   const busy = pending?.id === id, held = !why && !!queued[id], later = !why && r.state === 'working';
   if (held && $('r').value !== queued[id].text) { $('r').value = queued[id].text; grow(); }
