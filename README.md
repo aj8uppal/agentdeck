@@ -11,7 +11,8 @@ Needs an Apple Silicon Mac, WezTerm, Homebrew Python (`brew install python`) and
     gh repo clone aj8uppal/agentdeck ~/personal/agentdeck    # private repo: run `gh auth login` first
     ~/personal/agentdeck/install.sh
 
-That links `ag` into `~/.local/bin`, links the pi extension (`pi/agentdeck.ts`) into `~/.pi/agent/extensions`, builds `Agentdeck.app` and starts it.
+That links `ag` into `~/.local/bin`, links the pi extensions into `~/.pi/agent/extensions`, builds `Agentdeck.app` and starts it.
+`pi/agentdeck.ts` puts pi in the deck (state, cost, replies); `pi/autoname.ts` names each pi session and its tab from what it is about (`/autoname` to redo it; a `/name` of yours is kept).
 Pi sessions already open show up after `/reload` or a restart. Run it again after a `git pull` to update.
 
 - Option+Space opens the deck, Option+Shift+Space jumps to whoever needs you.
