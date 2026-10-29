@@ -1,4 +1,4 @@
-// Agentdeck: a floating deck over WezTerm for every running Claude Code / Codex agent.
+// Agentdeck: a floating deck over WezTerm for every running Claude Code / Codex / pi agent.
 // All agent state comes from `ag stream`, and replies go through `ag send`. This file is only the window, the hotkey,
 // the menu-bar count, notifications, and the few things the page may ask for.
 import AppKit
@@ -147,7 +147,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, WKScriptMess
     var shape: Shape { !pinned || expanded ? .deck : folded ? .pill : .strip }
     var commands: [String: String] {  // what "New agent" runs; yours to change in the form
         ["claude": UserDefaults.standard.string(forKey: "command-claude") ?? "claude --dangerously-skip-permissions",
-         "codex": UserDefaults.standard.string(forKey: "command-codex") ?? "personalcodex --yolo"]
+         "codex": UserDefaults.standard.string(forKey: "command-codex") ?? "personalcodex --yolo",
+         "pi": UserDefaults.standard.string(forKey: "command-pi") ?? "pi"]
     }
     /// Hand-backs you have dealt with: agent id -> the moment it stopped. A new stop makes it fresh again.
     var seen = (UserDefaults.standard.dictionary(forKey: "seen") as? [String: Double]) ?? [:]
@@ -693,7 +694,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, WKScriptMess
     func launch(_ m: [String: Any]) {
         let dir = ((m["dir"] as? String ?? "") as NSString).expandingTildeInPath
         let command = (m["command"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let prompt = m["prompt"] as? String ?? "", kind = m["kind"] as? String == "codex" ? "codex" : "claude", rev = m["rev"] as? Int ?? 0
+        let prompt = m["prompt"] as? String ?? "", kind = ["codex", "pi"].contains(m["kind"] as? String ?? "") ? m["kind"] as! String : "claude", rev = m["rev"] as? Int ?? 0
         func answer(_ ok: Bool, _ text: String) { js("deck.launched(\(ok), \(literal(text)), \(rev))") }
         var isDir: ObjCBool = false
         guard let wez = wezterm else { return answer(false, "WezTerm is not running") }
@@ -709,8 +710,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, WKScriptMess
                 before = clients.min { ($0["idle_time"] as? [String: Any])?["secs"] as? Int ?? 0 < ($1["idle_time"] as? [String: Any])?["secs"] as? Int ?? 0 }?["focused_pane_id"] as? Int
             }
             // The prompt rides in the environment and is only ever referenced as "$AGENTDECK_PROMPT" after "--":
-            // the shell never parses it, and the agent's CLI cannot mistake it for an option.
-            let script = prompt.isEmpty ? command : command + " -- \"$AGENTDECK_PROMPT\""
+            // the shell never parses it, and the agent's CLI cannot mistake it for an option. pi has no "--", so its
+            // prompt gets a leading space instead: then it can start with neither "-" (an option) nor "@" (a file).
+            let script = prompt.isEmpty ? command : kind == "pi" ? command + " \" $AGENTDECK_PROMPT\"" : command + " -- \"$AGENTDECK_PROMPT\""
             // WezTerm hands the caller's environment to the new tab, so give it a plain login environment and nothing of ours.
             var env = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "AGENTDECK_PROMPT": prompt]
             for key in ["HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "SSH_AUTH_SOCK"] { env[key] = ProcessInfo.processInfo.environment[key] }
@@ -889,7 +891,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, WKScriptMess
     /// A small panel beside the pinned pill or strip (or in the top-right corner). It never takes the keyboard; a click
     /// runs `action` and it fades after a few seconds (longer when an agent is blocked).
     func ownBanner(title: String, body: String, urgent: Bool, action: @escaping () -> Void) {
-        DispatchQueue.main.async {
+        DispatchQueue.main.async { [self] in
             let width: CGFloat = 340, height: CGFloat = body.isEmpty ? 44 : 66
             let tint = urgent ? NSColor(srgbRed: 0.953, green: 0.545, blue: 0.659, alpha: 1) : NSColor(srgbRed: 0.976, green: 0.886, blue: 0.686, alpha: 1)
             let view = BannerView(frame: NSRect(x: 0, y: 0, width: width, height: height))

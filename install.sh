@@ -6,6 +6,10 @@ cd "$(dirname "$0")"
 command -v swiftc >/dev/null || { echo "Needs the Xcode command line tools: xcode-select --install"; exit 1; }
 mkdir -p ~/.local/bin ~/.cache
 ln -sf "$PWD/ag" ~/.local/bin/ag
+if [ -d ~/.pi/agent ]; then  # pi lists itself to Agentdeck through this extension; running pi pick it up on /reload
+  mkdir -p ~/.pi/agent/extensions
+  ln -sf "$PWD/pi/agentdeck.ts" ~/.pi/agent/extensions/agentdeck.ts
+fi
 ./ag check
 ./app/build.sh
 pkill -x Agentdeck 2>/dev/null || true

@@ -272,7 +272,7 @@ const backdrop = `html{background:
 
   // starting a new agent: project by typing, the command shown before it runs, the prompt optional
   await page.evaluate((a) => deck.update({ rows: a[0], projects: a[1] }, {}), [rows(), projects]);
-  await page.evaluate(() => deck.show('palette', { commands: { claude: 'claude --flag', codex: 'codex --flag' } }));
+  await page.evaluate(() => deck.show('palette', { commands: { claude: 'claude --flag', codex: 'codex --flag', pi: 'pi --flag' } }));
   await page.evaluate(() => document.getElementById('row-y1').click());
   await page.keyboard.press('Meta+n');
   assert.equal(await page.evaluate(() => document.getElementById('new').hidden), false);
@@ -294,6 +294,10 @@ const backdrop = `html{background:
   await page.keyboard.press('Meta+Enter');
   await page.evaluate(() => deck.launched(true, 'Started codex in sea-game', window.lastLaunch.rev));
   assert.equal(await page.evaluate(() => document.getElementById('new').hidden), true);
+  await page.keyboard.press('Meta+n'); await page.click('#nPi');
+  assert.equal(await page.inputValue('#nCmd'), 'pi --flag');
+  assert.equal(await page.getAttribute('#nPi', 'aria-pressed'), 'true');
+  await page.keyboard.press('Escape');
   if (shots) { await page.keyboard.press('Meta+n'); await page.fill('#nProj', 'h'); await page.screenshot({ path: shots + '/deck-new.png' }); await page.keyboard.press('Escape'); }
 
   // a headless run has no tab

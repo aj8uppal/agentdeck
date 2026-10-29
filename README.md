@@ -1,6 +1,6 @@
 # Agentdeck
 
-A floating deck over WezTerm for every Claude Code and Codex agent on this Mac: who needs you, who is working,
+A floating deck over WezTerm for every Claude Code, Codex and pi agent on this Mac: who needs you, who is working,
 and a way to reply or jump to one without hunting for its tab. The full guide is `.lavish/ag-guide.html`.
 
 ## Set up on a Mac
@@ -11,7 +11,8 @@ Needs an Apple Silicon Mac, WezTerm, Homebrew Python (`brew install python`) and
     gh repo clone aj8uppal/agentdeck ~/personal/agentdeck    # private repo: run `gh auth login` first
     ~/personal/agentdeck/install.sh
 
-That links `ag` into `~/.local/bin`, builds `Agentdeck.app` and starts it. Run it again after a `git pull` to update.
+That links `ag` into `~/.local/bin`, links the pi extension (`pi/agentdeck.ts`) into `~/.pi/agent/extensions`, builds `Agentdeck.app` and starts it.
+Pi sessions already open show up after `/reload` or a restart. Run it again after a `git pull` to update.
 
 - Option+Space opens the deck, Option+Shift+Space jumps to whoever needs you.
 - To start it with the Mac: menu-bar icon, then "Open at login".

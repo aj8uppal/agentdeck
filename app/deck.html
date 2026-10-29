@@ -57,7 +57,7 @@
   .row .title { font-weight: 560; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .row .line { margin-top: 1px; font-size: 12px; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .row .tag { font: 500 11px var(--mono); margin-right: 7px; }
-  .tag.claude { color: var(--peach); } .tag.codex { color: var(--blue); } .tag.proj { color: var(--o1); }
+  .tag.claude { color: var(--peach); } .tag.codex { color: var(--blue); } .tag.pi { color: var(--mauve); } .tag.proj { color: var(--o1); }
   .row.working .title, .row.done .title { font-weight: 450; color: #bac2de; }
   .row.seen { opacity: .62; }
   .row .meta { flex: none; display: flex; align-items: center; gap: 7px; font: 500 11px var(--mono); color: var(--o1); }
@@ -280,7 +280,7 @@
       <div><div class="state">New agent</div><h1>Start one without leaving what you are doing</h1></div>
       <label>Project folder<input id="nProj" spellcheck="false" autocomplete="off" placeholder="type to search ~/personal, or a full path"></label>
       <div id="nList"></div>
-      <div class="row2"><div class="seg"><button class="btn" id="nClaude" type="button">Claude</button><button class="btn" id="nCodex" type="button">Codex</button></div></div>
+      <div class="row2"><div class="seg"><button class="btn" id="nClaude" type="button">Claude</button><button class="btn" id="nCodex" type="button">Codex</button><button class="btn" id="nPi" type="button">Pi</button></div></div>
       <label>Runs this command in a new tab<input id="nCmd" spellcheck="false" autocomplete="off"></label>
       <label>First prompt (optional)<textarea id="nPrompt" rows="4" spellcheck="false" placeholder="What should it do?"></textarea></label>
       <div class="row2"><span id="nWhy" role="status"></span><button id="nGo" type="button">Start<kbd>⌘↩</kbd></button></div>
@@ -300,7 +300,7 @@ let failed = {};                                       // the last refused send:
 let queued = {}, gone = {};                            // id -> {text, since, sid}: a reply held for one particular turn of a busy agent
 let tab = 'talk', talks = {}, diffOf = {}, events = [], looked = 0;      // dashboard: which tab; conversation and diff of the selected agent; what happened, and when you last looked
 let seq = 0, slots = [], launching = 0, patience = 20000, changed = {};  // request numbers; frozen ⌘1–9; git status of the selected agent
-let creating = false, projects = [], commands = { claude: 'claude', codex: 'codex' }, kind = 'claude', pick = 0;
+let creating = false, projects = [], commands = { claude: 'claude', codex: 'codex', pi: 'pi' }, kind = 'claude', pick = 0;
 let staleFor = 0, screens = {}, peek = false, bodySig = '', asksOpen = false;
 
 function el(tag, parent, text, cls) {
@@ -677,7 +677,7 @@ function drawTalk(r) {
   turns.forEach((t, i) => {
     const turn = el('div', box, null, 'turn'), last = i === turns.length - 1;
     if (t.you) { const w = el('div', turn, 'You', 'who'); if (t.at) el('span', w, ago(t.at) + ' ago'); el('div', turn, t.you, 'you'); }
-    const w = el('div', turn, r.kind === 'claude' ? 'Claude' : 'Codex', 'who');
+    const w = el('div', turn, { claude: 'Claude', codex: 'Codex', pi: 'Pi' }[r.kind], 'who');
     const cut = t.open && !last;  // you sent the next message before it had finished this one
     el('span', w, [t.steps ? t.steps + ' tool calls' : '', t.stopped ? 'you interrupted it' : cut ? 'not finished when you wrote again' : ''].filter(Boolean).join(' · '));
     if (t.said && !(last && t.open && r.state === 'working')) render(el('div', turn, null, 'it'), t.said);
@@ -723,7 +723,7 @@ function drawNew() {
   const list = $('nList'), m = matches(); list.textContent = '';
   pick = Math.max(0, Math.min(pick, m.length - 1));
   m.forEach((p, i) => { const b = el('button', list, p.name, i === pick ? 'on' : ''); b.type = 'button'; b.title = p.path; b.onclick = () => { $('nProj').value = p.name; pick = 0; drawNew(); $('nPrompt').focus(); }; });
-  $('nClaude').setAttribute('aria-pressed', kind === 'claude'); $('nCodex').setAttribute('aria-pressed', kind === 'codex');
+  $('nClaude').setAttribute('aria-pressed', kind === 'claude'); $('nCodex').setAttribute('aria-pressed', kind === 'codex'); $('nPi').setAttribute('aria-pressed', kind === 'pi');
 }
 function openNew(on) {
   creating = on; pick = 0; $('nWhy').textContent = '';
@@ -803,7 +803,7 @@ $('newBtn').onclick = () => openNew(!creating);
 $('boardBtn').onclick = () => post({ cmd: 'board', on: true });
 for (const b of $('tabs').children) b.onclick = () => setTab(b.dataset.tab);
 $('nGo').onclick = start;
-$('nClaude').onclick = () => setKind('claude'); $('nCodex').onclick = () => setKind('codex');
+$('nClaude').onclick = () => setKind('claude'); $('nCodex').onclick = () => setKind('codex'); $('nPi').onclick = () => setKind('pi');
 $('nProj').addEventListener('input', () => { pick = 0; drawNew(); });
 $('asked').onclick = () => { if (!getSelection().toString()) { asksOpen = !asksOpen; bodySig = ''; drawView(); } };
 $('foldBtn').onclick = (e) => { e.stopPropagation(); post({ cmd: 'fold', on: true }); };

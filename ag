@@ -1,5 +1,5 @@
 #!/opt/homebrew/bin/python3
-"""ag: one glance at every Claude Code and Codex agent running on this Mac.
+"""ag: one glance at every Claude Code, Codex and pi agent running on this Mac.
 
   ag            who needs you, who is working, on what, for how long
   ag watch      the same, live (ctrl-c to quit)
@@ -11,12 +11,13 @@
   ag stream     the full state as one JSON line every 2 s (what the Agentdeck app reads)
   ag send ID    paste stdin into that agent's terminal and press Return. Refuses unless that agent is waiting for a
                 prompt, still owns its terminal, and its input line is visibly empty.
-                (ID as in `ag stream`, e.g. claude-1234; --no-submit pastes without Return; --sid S also
+                (ID as in `ag stream`, e.g. claude-1234 or pi-5678; --no-submit pastes without Return; --sid S also
                 requires that agent to still be session S)
   ag talk ID    the last few exchanges with that agent, as JSON (the dashboard's conversation view)
   ag check      self-test
 
 BLOCKED = stopped mid-task on a dialog or question. your turn = finished, waiting for your next prompt.
+Pi agents are listed once pi has loaded pi/agentdeck.ts (install.sh links it; /reload a pi that predates it).
 """
 # Absolute interpreter on purpose: WezTerm's GUI has no Homebrew on PATH, and /usr/bin/python3 is the
 # Xcode shim, which stops working whenever the Xcode license is unaccepted.
@@ -24,6 +25,7 @@ import calendar, glob, json, os, re, shutil, subprocess, sys, tempfile, time
 
 HOME = os.path.expanduser('~')
 SEEN = os.path.join(HOME, '.cache', 'ag-seen.json')
+PI_STATUS = os.path.join(HOME, '.cache', 'agentdeck', 'pi')  # written by pi/agentdeck.ts
 RANK = {'blocked': 0, 'yours': 1, 'working': 2, 'done': 3}
 LOOK = {'blocked': ('1;31', '● BLOCKED'), 'yours': ('33', '◆ your turn'), 'working': ('32', '⠿ working'),
         'done': ('34', '✓ finished')}
@@ -331,6 +333,106 @@ def codex_row(pid, proc, o, procs):
         return row
 
 
+def pi_branch(lines):
+    """The entries of a pi session on its current branch, newest first, parsed only as far as the caller reads.
+    A pi session is a tree (/tree, /fork): the branch is the newest entry and its parents, not every line."""
+    want, held = '', {}
+    for line in lines:
+        e = load(line)
+        if not e.get('id'):
+            continue  # a line pi is still writing
+        want = want if want != '' else e['id']
+        held[e['id']] = e
+        while want in held:
+            e = held.pop(want)
+            want = e.get('parentId')
+            yield e
+        if want is None:
+            return
+
+
+def pi_text(content):
+    """What a pi message says, with an expanded /skill:name shown as you typed it."""
+    text = content if isinstance(content, str) else '\n'.join(b.get('text', '') for b in content or [] if b.get('type') == 'text')
+    return re.sub(r'^<skill name="([^"]+)"[^>]*>.*?</skill>\s*', r'/skill:\1 ', text, flags=re.S)
+
+
+def pi_call(block):
+    """'→ bash: git status' for a tool call in a pi message."""
+    args = block.get('arguments') or {}
+    return '→ %s: %s' % (block.get('name'), headline(str(args.get('command') or args.get('path') or ''))[:160])
+
+
+def pi_interrupted(message):
+    """Did you stop this pi answer with Esc? Mid-stream it ends 'aborted'; mid-tool, as an error saying so."""
+    return message.get('stopReason') == 'aborted' or message.get('stopReason') == 'error' and 'aborted' in (message.get('errorMessage') or '')
+
+
+def pi_log(path):
+    """(last prompt, when you sent it, its latest answer, tool it is running, note) from the current turn of a pi session."""
+    prompt = said = tool = note = ''
+    asked, ended = None, False
+    for e in pi_branch(tail(path, 1 << 20)):
+        m = e.get('message') or {} if e.get('type') == 'message' else {}
+        if m.get('role') == 'assistant':
+            if not ended:  # the newest answer says how the turn ended
+                ended = True
+                note = 'you interrupted it' if pi_interrupted(m) else 'stopped on an error: ' + headline(m.get('errorMessage') or '?')[:200] if m.get('stopReason') == 'error' else ''
+            said = said or pi_text(m.get('content')).strip()
+            tool = tool or next((pi_call(b) for b in m.get('content') or [] if b.get('type') == 'toolCall'), '')
+        elif m.get('role') == 'user':
+            prompt, asked = pi_text(m.get('content')), (m.get('timestamp') or 0) / 1000 or None
+            break
+    return prompt, asked, said, tool, note
+
+
+def pi_first_ask(path):
+    """The first thing you asked a pi session: its title until you name it. Kept once found; it never changes."""
+    hit = _MEMO.get(('pi-first', path))
+    if hit:
+        return hit[1]
+    try:
+        with open(path, 'rb') as f:
+            head = f.read(1 << 20).split(b'\n')
+    except OSError:
+        return ''
+    for line in head:
+        if b'"role":"user"' in line:
+            m = load(line).get('message') or {}
+            ask = headline(pi_text(m.get('content')))
+            if ask:
+                _MEMO[('pi-first', path)] = (0, ask)
+                return ask
+    return ''
+
+
+def pi_rows(procs):
+    for path in glob.glob(PI_STATUS + '/*.json'):
+        try:
+            with open(path) as f:
+                s = json.load(f)
+        except (OSError, ValueError):
+            continue
+        proc = procs.get(s.get('pid'))
+        if not proc or not re.match(r'(\S*/)?pi( |$)', proc[2]):
+            continue  # left behind by a pi that crashed
+        try:
+            yield pi_row(s, proc)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            pass
+
+
+def pi_row(s, proc):
+        log = s.get('sessionFile') or ''
+        there = bool(log) and os.path.isfile(log)  # pi creates its session file only once the first answer arrives
+        prompt, asked, said, tool, note = memo(('pi', log), sig(log), lambda: pi_log(log)) if there else ('', None, '', '', '')
+        state = 'working' if s.get('status') == 'busy' else 'yours'
+        return dict(kind='pi', pid=s['pid'], tty=proc[1], cwd=s.get('cwd', ''), state=state, since=(s.get('statusUpdatedAt') or 0) / 1000 or None,
+                    title=s.get('name') or (pi_first_ask(log) if there else '') or headline(prompt) or 'new session', prompt=prompt, said=said or tool,
+                    doing=tool if state == 'working' else '', note='' if state == 'working' else note, moved=os.stat(log).st_mtime if there else None,
+                    sid=s.get('sessionId') or '', asked=asked, file=log if there else '')
+
+
 def dialog(screen):
     """The question a terminal is stuck on, if the bottom of its screen is a numbered menu with a cursor on it; else ''."""
     lines = screen.rstrip().split('\n')[-25:]
@@ -354,7 +456,7 @@ def pane_list(procs):
 def snapshot(listed=None):
     procs = processes()
     by_tty = panes(listed or pane_list(procs))  # WezTerm's Lua passes its own list, so that poll never calls back into WezTerm
-    rows = list(claude_rows(procs)) + list(codex_rows(procs))
+    rows = list(claude_rows(procs)) + list(codex_rows(procs)) + list(pi_rows(procs))
     for r in rows:
         p = by_tty.get(r['tty'], {})
         r.update(tab=p.get('tab'), pane=p.get('pane_id'), tabid=p.get('tab_id'), win=p.get('window_id'), window=p.get('window'),
@@ -428,6 +530,9 @@ def prompt_empty(kind, screen):
     """True only if the bottom of this terminal (captured with escapes) shows the agent's input line holding nothing
     but its dimmed placeholder. Text someone already typed, a dialog, or no visible prompt at all gives False."""
     lines = screen.rstrip().split('\n')[-14:]
+    if kind == 'pi':  # no prompt mark: pi's input box is the lines between two ─ rules, and empty means one blank line
+        rules = [n for n, line in enumerate(lines) if shown(line) and not shown(line).strip('─')]
+        return len(rules) >= 2 and rules[-1] - rules[-2] == 2 and shown(lines[rules[-1] - 1]) == ''
     for n in range(len(lines) - 1, -1, -1):
         line = lines[n]
         if not ESC.sub('', line).lstrip().startswith(PROMPT[kind]):
@@ -612,6 +717,28 @@ def codex_talk(main, limit):
     return turns[-limit:]
 
 
+def pi_talk(path, limit):
+    """The same for pi, along the session's current branch."""
+    turns = []
+    for e in reversed(list(pi_branch(tail(path, 12 << 20)))):
+        m = e.get('message') or {} if e.get('type') == 'message' else {}
+        if m.get('role') == 'user':
+            text = pi_text(m.get('content')).strip()
+            if text:
+                turns.append(dict(you=text[:6000], at=(m.get('timestamp') or 0) / 1000 or None, said='', steps=0, ran=[], open=True))
+        elif m.get('role') == 'assistant' and turns:
+            t, calls = turns[-1], [b for b in m.get('content') or [] if b.get('type') == 'toolCall']
+            t['steps'] += len(calls)
+            t['ran'] += [pi_call(b).split(': ', 1)[1] for b in calls if b.get('name') == 'bash']
+            t['open'] = m.get('stopReason') == 'toolUse'
+            t['stopped'] = pi_interrupted(m) or t.get('stopped', False)
+            if pi_text(m.get('content')).strip():
+                t['said'] = pi_text(m.get('content')).strip()[:8000]
+    for t in turns:
+        t['ran'] = [x for x in t['ran'] if x][-15:]
+    return turns[-limit:]
+
+
 def talk(who, limit=8):
     """`ag talk ID`: the recent conversation with one agent, as JSON, for the dashboard."""
     row = next((r for r in snapshot([{}]) if ident(r) == who), None)  # no need to ask WezTerm about panes for this
@@ -619,6 +746,8 @@ def talk(who, limit=8):
     if row and row['kind'] == 'claude':
         logs = glob.glob('%s/.claude/projects/*/%s.jsonl' % (HOME, row.get('sid')))
         turns = claude_talk(logs[0], limit) if logs else []
+    elif row and row['kind'] == 'pi':
+        turns = pi_talk(row['file'], limit) if row['file'] else []
     elif row and row.get('log'):
         turns = codex_talk(row['log'], limit)
     print(json.dumps({'id': who, 'turns': turns}))
@@ -675,6 +804,27 @@ def check():
     assert not prompt_empty('claude', '❯ \n  delete the database\n────\n  ⏸ manual mode on') and prompt_empty('claude', '❯ \n────\n  ⏸ manual mode on')
     assert not prompt_empty('codex', '› \n  deploy production\n\n  ? for shortcuts') and prompt_empty('codex', '› \n   ⠄  ⠠ \n  ? for shortcuts')
     assert branch('/nonexistent/x') == '' and branch('') == ''
+    rule, foot = e + '[38:2::178:148:187m' + '─' * 40 + '\r', e + '[38:2::102:102:102m~/vivaa (main)\r\n↑868 ↓406k $82.418 (vertex) claude-opus-5-5 • high\r\n' + e + '[39m'
+    cursor = e + '(B' + e + '[0;7m ' + e + '(B' + e + '[0m\r'
+    pi_empty, pi_typed = '\n'.join(('  last answer\r', '\r', rule, cursor, rule, foot)), '\n'.join((rule, 'half typed' + cursor, rule, foot))
+    pi_tall = '\n'.join((rule, cursor, 'second line\r', rule, foot))
+    assert [prompt_empty('pi', x) for x in (pi_empty, pi_typed, pi_tall, claude_empty, '───\n\n')] == [True, False, False, False, False]
+    pi_ok = dict(kind='pi', pane=3, state='yours', pid=1)
+    assert refusal(pi_ok, pi_empty, True) == '' and refusal(pi_ok, pi_typed, True)
+    entry = lambda i, parent, role, content, **more: json.dumps(dict(type='message', id=i, parentId=parent, message=dict(role=role, content=content, timestamp=1000, **more))).encode()
+    session = [json.dumps(dict(type='session', id='s')).encode(), entry('u1', None, 'user', 'first ask'),
+               entry('a1', 'u1', 'assistant', [dict(type='text', text='abandoned answer')], stopReason='stop'),
+               entry('a2', 'u1', 'assistant', [dict(type='toolCall', name='bash', arguments=dict(command='git status\ngit log'))], stopReason='toolUse'),
+               entry('a3', 'a2', 'assistant', [dict(type='text', text='done')], stopReason='aborted')]
+    assert [x['id'] for x in pi_branch(reversed(session))] == ['a3', 'a2', 'u1']
+    with tempfile.NamedTemporaryFile() as f:
+        f.write(b'\n'.join(session) + b'\n')
+        f.flush()
+        assert pi_log(f.name) == ('first ask', 1, 'done', '→ bash: git status', 'you interrupted it')
+        assert pi_talk(f.name, 8) == [dict(you='first ask', at=1, said='done', steps=1, ran=['git status'], open=False, stopped=True)]
+    assert [pi_interrupted(x) for x in (dict(stopReason='aborted'), dict(stopReason='error', errorMessage='This operation was aborted'),
+                                        dict(stopReason='error', errorMessage='429 rate limited'), dict(stopReason='stop'))] == [True, True, False, False]
+    assert pi_text([dict(type='text', text='<skill name="ship" location="/x">\nlong\n</skill>\n\nfix it')]) == '/skill:ship fix it'
     ok = dict(kind='claude', pane=3, state='yours', pid=1)
     assert refusal(ok, claude_empty, True) == '' and refusal(dict(ok, kind='codex'), codex_empty, True) == ''
     for row, screen, fg in ((None, claude_empty, True), (dict(ok, state='working'), claude_empty, True), (dict(ok, state='blocked'), claude_empty, True),
