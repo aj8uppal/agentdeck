@@ -50,4 +50,4 @@ end
 ## Working on it
 
 `ag check` runs the feed's self-test. `node app/test.cjs` runs the interface tests (it borrows Playwright from
-`~/personal/3d-tetris`). `app/build.sh` rebuilds the app.
+`~/personal/3d-tetris`). `app/build.sh` rebuilds the app; after editing `app/icon.svg`, `node app/icon.cjs` re-renders `app/AppIcon.icns`.
