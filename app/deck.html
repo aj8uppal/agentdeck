@@ -134,6 +134,16 @@
   #sendBtn:disabled { background: rgba(205, 214, 244, .08); color: var(--o1); cursor: default; } #sendBtn:disabled kbd { color: var(--o0); }
   #sendBtn.plain { background: rgba(205, 214, 244, .1); color: var(--text); } #sendBtn.plain kbd { display: none; }
   #composer.off #reply { display: none; } #composer.off #to { padding-bottom: 2px; }
+  #question { padding: 11px 0 10px; border-top: 1px solid var(--line); }
+  #questionText { padding: 0 4px 8px; font: 600 13.5px/1.4 var(--ui); color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere;
+    max-height: 98px; overflow-y: auto; user-select: text; cursor: auto; }
+  #choices { display: flex; flex-direction: column; gap: 4px; }
+  #choices button { display: grid; grid-template-columns: auto 1fr; column-gap: 9px; align-items: baseline; padding: 7px 11px 7px 9px; border-radius: 9px; text-align: left;
+    background: rgba(205, 214, 244, .05); border: 1px solid rgba(205, 214, 244, .09); font: 560 12.5px/1.4 var(--ui); }
+  #choices button:hover:not(:disabled) { background: rgba(203, 166, 247, .14); border-color: rgba(203, 166, 247, .45); }
+  #choices button:disabled { opacity: .5; cursor: default; }
+  #choices .key { grid-row: span 2; }
+  #choices .why { grid-column: 2; font-weight: 400; font-size: 12px; color: var(--sub); }
 
   /* ── new agent ── */
   #new { flex: 1; min-width: 0; padding: 14px 20px 14px; display: flex; flex-direction: column; gap: 9px; overflow-y: auto; }
@@ -276,6 +286,7 @@
         <pre id="diff"></pre>
       </div>
       <div id="composer">
+        <div id="question" hidden><div id="questionText"></div><div id="choices"></div></div>
         <div id="to"></div>
         <div id="reply">
           <textarea id="r" rows="1" spellcheck="false" aria-label="Reply"></textarea>
@@ -462,7 +473,7 @@ function drawView() {
   $('head').querySelector('.where').textContent = [r.kind === 'exec' ? 'headless codex' : r.kind, spent(r.cost), r.proj + (r.branch ? ' ⎇ ' + r.branch : ''), place(r), r.subs ? '+' + r.subs + ' subagents' : '', timed(r), quiet(r)].filter(Boolean).join(' · ');
   $('openBtn').hidden = $('termBtn').hidden = r.pane == null;
   $('termBtn').setAttribute('aria-pressed', peek);
-  $('note').hidden = !r.note;
+  $('note').hidden = !r.note || !!r.question;  // a question is shown with its options, above the reply box
   if (r.note) { $('note').className = r.state; $('note').textContent = r.state === 'blocked' ? 'Waiting on: ' + r.note + '. Drop in to answer it.' : noted(r)[0].toUpperCase() + noted(r).slice(1) + '.'; }
   // the text: only redrawn when it changes, and without losing your place while you read
   const sig = [r.id, r.state, r.prompt, r.said, r.doing, r.cut].join('\u0001');
@@ -477,6 +488,7 @@ function drawView() {
     $('asked').className = r.prompt.length < 230 && r.prompt.split('\n').length < 4 ? 'short' : asksOpen ? 'open' : '';
     $('saidLabel').textContent = r.state === 'working' ? 'Latest from it' : r.state === 'done' ? 'Final message' : 'It said';
     render($('said'), r.said || 'Nothing yet.');
+    $('saidLabel').hidden = $('said').hidden = !!r.question && !r.said;  // nothing but the question, which is shown below
     if (r.cut) el('p', $('said'), 'Cut at 4,000 characters. Drop in for the rest.', 'cut');
     $('scroll').scrollTop = same ? y : 0;
   }
@@ -488,7 +500,7 @@ function drawView() {
 }
 /* The terminal itself, for a blocked agent (so you can read the question) or on request. */
 function drawScreen(r) {
-  const show = r.pane != null && (peek || (r.state === 'blocked' && mode !== 'board'));
+  const show = r.pane != null && (peek || (r.state === 'blocked' && !r.question && mode !== 'board'));
   $('screenLabel').hidden = $('screen').hidden = !show;
   if (!show) return;
   const text = screens[r.id];
@@ -499,7 +511,7 @@ function drawScreen(r) {
 }
 function wantScreen() {
   const r = current();
-  if (open && (mode === 'palette' || mode === 'board') && r && r.pane != null && (peek || (r.state === 'blocked' && mode === 'palette'))) post({ cmd: 'screen', id: r.id });
+  if (open && (mode === 'palette' || mode === 'board') && r && r.pane != null && (peek || (r.state === 'blocked' && !r.question && mode === 'palette'))) post({ cmd: 'screen', id: r.id });
 }
 
 /* The reply box. A draft belongs to the agent it was typed for and follows the selection. */
@@ -513,8 +525,11 @@ function syncComposer(r) {
   if (!r) return;
   const why = staleFor ? 'Agent status is out of date, so replies are off until it is fresh again.'
     : r.pane == null && r.kind !== 'pi' ? (r.state === 'done' ? 'This headless run has finished.' : r.kind === 'exec' ? 'Headless run: there is no terminal to reply to.' : 'Not in a WezTerm tab, so there is nowhere to send a reply.')
-    : r.state === 'blocked' && !queued[id] ? 'Blocked on a dialog. Press ↩ to drop in and answer it there.' : '';
+    : r.state === 'blocked' && !queued[id] && !r.question ? 'Blocked on a dialog. Press ↩ to drop in and answer it there.' : '';
   const busy = pending?.id === id, held = !why && !!queued[id], later = !why && r.state === 'working';
+  const asking = !why && !held && r.question;
+  $('question').hidden = !asking;
+  if (asking) drawQuestion(r, busy);
   if (held && $('r').value !== queued[id].text) { $('r').value = queued[id].text; grow(); }
   $('composer').classList.toggle('off', !!why);
   if (why && document.activeElement === $('r')) $('q').focus();
@@ -523,11 +538,27 @@ function syncComposer(r) {
   $('to').classList.toggle('bad', !why && !busy && failed.id === id);
   if (!why && !busy && failed.id === id) $('to').textContent = failed.reason;
   else if (why) $('to').textContent = r.state === 'blocked' && r.pane != null ? '' : why;
-  else { $('to').append(busy ? 'Sending to ' : held ? 'Queued for ' : later ? 'Queue for ' : 'Reply to '); el('b', $('to'), r.title); if (held || later) $('to').append(': sent the moment it finishes its turn'); }
-  $('r').placeholder = later ? 'It is busy. Write now; it is sent when this turn ends' : r.kind === 'pi' ? 'Sent to it as your next message, without leaving this window' : 'Pasted into its prompt and submitted, without leaving this window';
+  else { $('to').append(busy ? 'Sending to ' : held ? 'Queued for ' : later ? 'Queue for ' : asking ? 'Answer ' : 'Reply to '); el('b', $('to'), r.title); if (held || later) $('to').append(': sent the moment it finishes its turn'); }
+  $('r').placeholder = later ? 'It is busy. Write now; it is sent when this turn ends' : asking ? 'Pick an answer above, or write your own' : r.kind === 'pi' ? 'Sent to it as your next message, without leaving this window' : 'Pasted into its prompt and submitted, without leaving this window';
   $('sendBtn').disabled = !!why || busy || (!held && !$('r').value.trim());
-  $('sendBtn').firstChild.textContent = busy ? 'Sending' : held ? 'Cancel' : later ? 'Queue' : 'Send';
+  $('sendBtn').firstChild.textContent = busy ? 'Sending' : held ? 'Cancel' : later ? 'Queue' : asking ? 'Answer' : 'Send';
   $('sendBtn').classList.toggle('plain', held);
+}
+/* An ask_user question from pi: its options as buttons; a click (or ⌃1-4) sends that option as the answer. */
+function drawQuestion(r, busy) {
+  const sig = [r.id, r.question.prompt, ...r.question.options.map((option) => option.label)].join('\u0001');
+  if (sig !== drawQuestion.sig) {  // rebuilt only when the question changes, so a button never vanishes under the pointer
+    drawQuestion.sig = sig;
+    $('questionText').textContent = r.question.prompt;
+    $('choices').textContent = '';
+    r.question.options.forEach((option, index) => {
+      const b = el('button', $('choices')); b.type = 'button';
+      el('span', b, String(index + 1), 'key'); el('span', b, option.label);
+      if (option.description) el('span', b, option.description, 'why');
+      b.onclick = () => { const now = current(); if (now?.id === r.id && now.question?.prompt === r.question.prompt && !pending) deliver(now, option.label, true, false); };
+    });
+  }
+  for (const b of $('choices').children) b.disabled = busy || !!pending;
 }
 function grow() {  // while the box is not on screen (the pinned strip) it measures 0: leave the height alone then
   const r = $('r'); r.style.height = 'auto'; r.style.height = r.scrollHeight ? Math.min(104, r.scrollHeight) + 'px' : '';
@@ -546,10 +577,10 @@ function drawSum() {
 }
 function drawKeys() {
   const k = $('keys'); k.textContent = '';
-  const busy = current()?.state === 'working';
+  const busy = current()?.state === 'working', choices = $('question').hidden ? 0 : $('choices').children.length;
   const hints = creating ? [['⌘↩', 'start it'], ['esc', 'cancel']]
     : document.activeElement === $('r') ? (busy ? [['⌘↩', 'queue for when it finishes'], ['esc', 'back to list']] : [['⌘↩', 'send'], ['⇧⌘↩', 'paste and drop in'], ['esc', 'back to list']])
-    : [['↑↓', 'move'], ['↩', 'drop in'], ['⇥', 'reply'], ['⌘T', 'terminal'], ['⌘D', 'seen'], ['⌘N', 'new agent'], mode === 'board' ? ['⌘W', 'close'] : ['⌘⇧D', 'dashboard'], ...(mode === 'board' ? [] : [['esc', 'close']])];
+    : [...(choices ? [['⌃1-' + choices, 'answer']] : []), ['↑↓', 'move'], ['↩', 'drop in'], ['⇥', 'reply'], ['⌘T', 'terminal'], ['⌘D', 'seen'], ['⌘N', 'new agent'], mode === 'board' ? ['⌘W', 'close'] : ['⌘⇧D', 'dashboard'], ...(mode === 'board' ? [] : [['esc', 'close']])];
   for (const [key, word] of hints) { const s = el('span', k); el('kbd', s, key); s.append(word); }
 }
 function draw() {
@@ -609,7 +640,7 @@ function deliver(r, text, submit, fromQueue) {
     if (fromQueue) unqueue(r.id, why); else { failed = { id: r.id, reason: why }; toast('Not confirmed', true); }
     draw();
   }, patience);
-  post({ cmd: 'send', id: r.id, sid: r.sid || '', text, submit, req: mine.req });
+  post({ cmd: 'send', id: r.id, sid: r.sid || '', question: r.question?.prompt ?? '', text, submit, req: mine.req });
   if (!fromQueue) toast('Sending…');
   draw();
 }
@@ -807,6 +838,7 @@ function press(key, mod = {}) {
   }
   if (mod.meta && k === 'Enter') return inReply ? send(!mod.shift) : jump(current()), true;
   if (mod.meta && /^[1-9]$/.test(k)) return jump(rows.find((r) => r.id === slots[+k - 1])), true;
+  if (mod.ctrl && /^[1-9]$/.test(k)) return !$('question').hidden && $('choices').children[+k - 1]?.click(), true;
   if (mod.meta && k === 'p') return post({ cmd: 'pin', on: !pinned }), true;
   if (mod.meta && k === 't') return (mode === 'board' ? setTab(tab === 'term' ? 'talk' : 'term') : togglePeek()), true;
   if (mod.meta && k === 'd') { const r = current(); markSeen(r, r && isNew(r)); draw(); return true; }

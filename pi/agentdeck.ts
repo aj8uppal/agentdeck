@@ -6,12 +6,16 @@
  * - inbox: `ag send` drops <pid>.inbox; it becomes a user message (queued as a follow-up while pi works), so a reply
  *   never goes through the terminal and never touches a draft in the editor. `ag rename` uses it to name the session.
  *   The outcome goes to <pid>.result.
+ * - ask_user: a tool for the model to ask you a question with options. The session shows as blocked on it, the deck
+ *   shows its options, and a reply from the deck answers it (closing the dialog in the terminal).
  * install.sh links this into ~/.pi/agent/extensions/.
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
+import { Type } from "typebox";
 
 const folder = join(homedir(), ".cache", "agentdeck", "pi");
 const statusFile = join(folder, `${process.pid}.json`);
@@ -32,6 +36,7 @@ export default function (pi: ExtensionAPI) {
 	const dialogs: string[] = []; // titles of dialogs open right now, newest last
 	let cost = 0;
 	let poll: ReturnType<typeof setInterval> | undefined;
+	let question: { prompt: string; options: { label: string; description?: string }[]; answer: (text: string) => void } | undefined;
 
 	function write(ctx: ExtensionContext) {
 		if (ctx.mode !== "tui") return; // print/json/rpc runs have no terminal to show or reply to
@@ -43,8 +48,9 @@ export default function (pi: ExtensionAPI) {
 				sessionFile: ctx.sessionManager.getSessionFile() ?? "",
 				cwd: ctx.cwd,
 				name: pi.getSessionName() ?? "",
-				status: dialogs.length ? "waiting" : status,
-				waitingFor: dialogs.at(-1) ?? "",
+				status: dialogs.length || question ? "waiting" : status,
+				waitingFor: question?.prompt ?? dialogs.at(-1) ?? "",
+				question: question ? { prompt: question.prompt, options: question.options } : null,
 				statusUpdatedAt,
 				startedAt,
 				cost,
@@ -97,10 +103,20 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 		try {
-			const { text, submit, sid, rename } = JSON.parse(readFileSync(taken, "utf8")) as { text: string; submit: boolean; sid?: string; rename?: string };
+			const request = JSON.parse(readFileSync(taken, "utf8")) as { text: string; submit: boolean; sid?: string; rename?: string; question?: string };
+			const { text, submit, sid, rename } = request;
 			if (sid && sid !== ctx.sessionManager.getSessionId()) return answer({ ok: false, why: "that is a different session now; nothing was sent" });
 			if (rename) {
 				pi.setSessionName(rename); // autoname treats it like a /name of yours and keeps it
+				return answer({ ok: true });
+			}
+			// the question the reply was written for, "" for none: never answer a different one than the sender saw
+			if ((request.question ?? "") !== (question?.prompt ?? "")) {
+				return answer({ ok: false, why: question ? "it has asked you a question since; answer that instead" : "that question is no longer open; nothing was sent" });
+			}
+			if (question) {
+				if (!submit) return answer({ ok: false, why: "it is asking you a question; send your answer instead" });
+				question.answer(text);
 				return answer({ ok: true });
 			}
 			if (dialogs.length) return answer({ ok: false, why: "it is waiting on a dialog; drop in and answer it there" });
@@ -115,13 +131,94 @@ export default function (pi: ExtensionAPI) {
 		}
 	}
 
+	pi.registerTool({
+		name: "ask_user",
+		label: "Question",
+		description:
+			"Ask the user a question you need answered to continue, with 2-4 options to pick from; they can also answer in their own words. Waits for the answer.",
+		promptSnippet: "Ask the user a multiple-choice question and wait for the answer",
+		promptGuidelines: [
+			"Use ask_user when you need the user's decision to continue, instead of asking in your reply and ending your turn: ask_user shows the session as waiting on them, and they can answer it from Agentdeck without opening the terminal.",
+			"Use ask_user for one real decision at a time, with concrete options and your recommendation first; do not use ask_user for status updates, or to ask permission for what you were already asked to do.",
+		],
+		parameters: Type.Object({
+			question: Type.String({ description: "The question, with enough context to answer it without scrolling back" }),
+			options: Type.Array(
+				Type.Object({
+					label: Type.String({ description: "A short answer, a few words" }),
+					description: Type.Optional(Type.String({ description: "What picking it means, or its tradeoff, in one sentence" })),
+				}),
+				{ minItems: 2, maxItems: 4 },
+			),
+		}),
+		executionMode: "sequential",
+
+		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+			if (ctx.mode !== "tui") throw new Error("ask_user needs the interactive terminal; ask in your reply instead");
+			if (question) throw new Error("another ask_user question is still open; ask one at a time");
+			const fromDeck = new AbortController();
+			const dismiss = signal ? AbortSignal.any([signal, fromDeck.signal]) : fromDeck.signal;
+			let deckAnswer: string | undefined;
+			const details = { question: params.question, options: params.options.map((option) => option.label), answer: null as string | null };
+			const answered = (text: string) => {
+				const picked = details.options.includes(text);
+				details.answer = text;
+				return { content: [{ type: "text" as const, text: picked ? `The user picked: ${text}` : `The user answered: ${text}` }], details };
+			};
+			question = {
+				prompt: params.question,
+				options: params.options,
+				answer: (text) => {
+					deckAnswer = text;
+					fromDeck.abort(); // closes whichever dialog is open in the terminal
+				},
+			};
+			statusUpdatedAt = Date.now();
+			write(ctx);
+			try {
+				const shown = params.options.map((option) => (option.description ? `${option.label}: ${option.description}` : option.label));
+				const other = "Something else (type it)";
+				for (;;) {
+					const picked = await ctx.ui.select(params.question, [...shown, other], { signal: dismiss });
+					if (deckAnswer !== undefined || picked === undefined) break;
+					if (picked !== other) return answered(params.options[shown.indexOf(picked)].label);
+					const typed = (await ctx.ui.input(params.question, "Your answer (Esc goes back to the options)", { signal: dismiss }))?.trim();
+					if (deckAnswer !== undefined) break;
+					if (typed) return answered(typed);
+				}
+				if (deckAnswer !== undefined) return answered(deckAnswer);
+				// Esc on the options: end the turn so the user can say what they want instead
+				return {
+					content: [{ type: "text", text: "The user dismissed the question without answering. Stop and wait for their next message." }],
+					details,
+					terminate: true,
+				};
+			} finally {
+				question = undefined;
+				write(ctx);
+			}
+		},
+
+		renderCall(args, theme) {
+			return new Text(theme.fg("toolTitle", theme.bold("ask_user ")) + theme.fg("muted", String(args.question ?? "")), 0, 0);
+		},
+		renderResult(result, _options, theme) {
+			const details = result.details as { answer: string | null } | undefined;
+			const first = result.content[0];
+			if (!details) return new Text(first?.type === "text" ? first.text : "", 0, 0); // an error
+			return new Text(details.answer ? theme.fg("success", "✓ ") + theme.fg("accent", details.answer) : theme.fg("warning", "Dismissed"), 0, 0);
+		},
+	});
+
 	pi.on("session_start", (_event, ctx) => {
-		if (ctx.mode !== "tui") return;
+		// print/json/rpc runs (e.g. `pi -p`) have nobody to ask
+		if (ctx.mode !== "tui") return pi.setActiveTools(pi.getActiveTools().filter((name) => name !== "ask_user"));
 		watchDialogs(ctx);
 		hooks.agentdeckDialog = (title, open) => {
 			if (open) dialogs.push(title);
 			else dialogs.splice(dialogs.lastIndexOf(title), 1);
-			statusUpdatedAt = Date.now(); // each new dialog is a new hand-back, so marking one as seen never hides the next
+			// each new dialog is a new hand-back, so marking one as seen never hides the next; a question's own dialogs are one
+			if (!question) statusUpdatedAt = Date.now();
 			write(ctx);
 		};
 		tally(ctx);

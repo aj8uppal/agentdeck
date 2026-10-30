@@ -12,8 +12,10 @@
   ag send ID    paste stdin into that agent's terminal and press Return. Refuses unless that agent is waiting for a
                 prompt, still owns its terminal, and its input line is visibly empty.
                 A pi agent takes it through its extension instead: no terminal involved, queued while it works.
+                A pi blocked on an ask_user question takes it as the answer (an option's label, or your own words).
                 (ID as in `ag stream`, e.g. claude-1234 or pi-5678; --no-submit pastes without Return; --sid S also
-                requires that agent to still be session S)
+                requires that agent to still be session S; --question Q requires its open question to still be Q,
+                "" for none, instead of whichever is open when the text arrives)
   ag talk ID    the last few exchanges with that agent, as JSON (the dashboard's conversation view)
   ag recap ID   one paragraph on where that agent stands and what it needs from you, as JSON; written by a small
                 model through `pi -p`, and kept until its state or your last prompt changes
@@ -373,7 +375,7 @@ def pi_text(content):
 def pi_call(block):
     """'→ bash: git status' for a tool call in a pi message."""
     args = block.get('arguments') or {}
-    return '→ %s: %s' % (block.get('name'), headline(str(args.get('command') or args.get('path') or ''))[:160])
+    return '→ %s: %s' % (block.get('name'), headline(str(args.get('command') or args.get('path') or args.get('question') or ''))[:160])
 
 
 def pi_interrupted(message):
@@ -441,10 +443,11 @@ def pi_row(s, proc):
         prompt, asked, said, tool, note = memo(('pi', log), sig(log), lambda: pi_log(log)) if there else ('', None, '', '', '')
         state = {'busy': 'working', 'waiting': 'blocked'}.get(s.get('status'), 'yours')
         return dict(kind='pi', pid=s['pid'], tty=proc[1], cwd=s.get('cwd', ''), state=state, since=(s.get('statusUpdatedAt') or 0) / 1000 or None,
-                    title=s.get('name') or (pi_first_ask(log) if there else '') or headline(prompt) or 'new session', prompt=prompt, said=said or tool,
+                    title=s.get('name') or (pi_first_ask(log) if there else '') or headline(prompt) or 'new session', prompt=prompt,
+                    said=said or ('' if s.get('question') else tool),  # an open question is shown as itself, not as a tool call
                     doing=tool if state == 'working' else '', note=s.get('waitingFor') or ('' if state == 'working' else note),
                     moved=os.stat(log).st_mtime if there else None, sid=s.get('sessionId') or '', asked=asked, file=log if there else '',
-                    cost=s.get('cost'))
+                    cost=s.get('cost'), question=s.get('question'))
 
 
 def dialog(screen):
@@ -497,7 +500,8 @@ def as_rows(rows):
     """What the Agentdeck app needs per agent."""
     keys = ('kind', 'pid', 'state', 'since', 'title', 'proj', 'tab', 'pane', 'tabid', 'win', 'window', 'where', 'branch', 'prompt', 'note', 'cwd')
     return [dict({k: r[k] for k in keys}, id=ident(r), said=r['said'].strip()[:4000], cut=len(r['said'].strip()) > 4000,
-                 doing=r.get('doing', ''), subs=r.get('subs', 0), moved=r.get('moved'), sid=r.get('sid', ''), asked=r.get('asked'), cost=r.get('cost')) for r in rows]
+                 doing=r.get('doing', ''), subs=r.get('subs', 0), moved=r.get('moved'), sid=r.get('sid', ''), asked=r.get('asked'), cost=r.get('cost'),
+                 question=r.get('question')) for r in rows]
 
 
 def ident(r):
@@ -596,7 +600,7 @@ def refusal(row, screen, foreground):
     return ''
 
 
-def send(who, text, submit, sid=''):
+def send(who, text, submit, sid='', question=None):
     """Paste `text` into an agent's terminal and press Return, but only on proof that its empty prompt is what will
     receive it: state, foreground process and screen are all read after the text is in hand, just before typing."""
     if not text.strip() or len(text) > 20000:
@@ -605,7 +609,7 @@ def send(who, text, submit, sid=''):
     if row and sid and row.get('sid', '') != sid:
         sys.exit('that is a different session now; nothing was sent')
     if row and row['kind'] == 'pi':
-        return send_pi(row, text, submit, sid)
+        return send_pi(row, text, submit, sid, question)
     wez = wezterm(processes())
     target = ['--pane-id', str(row['pane'])] if row and row['pane'] is not None else []
 
@@ -627,12 +631,14 @@ def send(who, text, submit, sid=''):
         sys.exit('pasted but NOT submitted: drop in and check its prompt before sending again')
 
 
-def send_pi(row, text, submit, sid):
+def send_pi(row, text, submit, sid, question):
     """Hand `text` to pi through pi/agentdeck.ts: no terminal, no screen to read, and a draft in its editor stays put.
-    While it works the reply is queued as a follow-up; a dialog it is waiting on must be answered in the tab."""
-    if row['state'] == 'blocked':
+    While it works the reply is queued as a follow-up. An ask_user question takes it as the answer; any other dialog it
+    is waiting on must be answered in the tab."""
+    showing = (row.get('question') or {}).get('prompt', '')
+    if row['state'] == 'blocked' and not showing:
         sys.exit('it is waiting on a dialog; drop in and answer it there')
-    pi_inbox(row, dict(text=text, submit=submit, sid=sid))
+    pi_inbox(row, dict(text=text, submit=submit, sid=sid, question=showing if question is None else question))  # pi checks it again on arrival
 
 
 def pi_inbox(row, request):
@@ -693,6 +699,8 @@ def peek(rows, tab):
                                                         ago(r['since']), titled(r)))
             if r['note']:
                 print('waiting on: ' + r['note'])
+            for n, option in enumerate((r.get('question') or {}).get('options', []), 1):
+                print('  %d. %s' % (n, option['label']) + (': ' + option['description'] if option.get('description') else ''))
             if r.get('cost'):
                 print('spent:      $%.2f' % r['cost'])
             print('you asked:  ' + ' '.join(r['prompt'].split())[:400])
@@ -1006,7 +1014,8 @@ def main(argv):
         return rename(''.join(argv[1:2]), ' '.join(argv[2:]))
     if cmd == 'send':  # the text is read first, so the state check below is as late as it can be
         sid = argv[argv.index('--sid') + 1] if '--sid' in argv[:-1] else ''
-        return send(''.join(argv[1:2]), sys.stdin.read(), '--no-submit' not in argv, sid)
+        question = argv[argv.index('--question') + 1] if '--question' in argv[:-1] else None
+        return send(''.join(argv[1:2]), sys.stdin.read(), '--no-submit' not in argv, sid, question)
     if cmd not in ('ls', 'watch', 'peek', 'json', 'go', 'next'):
         return print(__doc__)
     rows = snapshot(load(argv[-1]) if cmd == 'json' else None)

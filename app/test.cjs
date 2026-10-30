@@ -420,6 +420,34 @@ const backdrop = `html{background:
   assert.deepEqual(await msgs(board, 'board'), [{ cmd: 'board', on: false }]);
   assert.deepEqual(board.errors, []);
 
+  // a pi ask_user question: its options are buttons, the reply box answers it too, and every answer names the question
+  // it was written for (pi refuses one that arrives after a different question has replaced it)
+  const asking = await open(900, 580);
+  const question = { prompt: 'Ship the icon as is, or try another design first?', options: [{ label: 'Ship it', description: 'Commit it and rebuild the app' }, { label: 'Another design' }] };
+  await asking.evaluate((r) => deck.update({ rows: r }, {}), [agent({ id: 'q1', kind: 'pi', state: 'blocked', since: now - 30, title: 'Agentdeck icon', proj: 'agentdeck', tab: 4, pane: 40, note: question.prompt, question }), ...rows()]);
+  await asking.evaluate(() => deck.show('palette', {}));
+  await asking.evaluate(() => document.getElementById('row-q1').click());
+  assert.ok(!(await msgs(asking, 'screen')).some((m) => m.id === 'q1'), 'its options are shown, so its terminal is not read');
+  assert.equal(await asking.textContent('#questionText'), question.prompt);
+  assert.deepEqual(await asking.$$eval('#choices button', (b) => b.map((x) => x.textContent)), ['1Ship itCommit it and rebuild the app', '2Another design']);
+  assert.equal(await asking.evaluate(() => document.getElementById('r').disabled), false, 'a question can be answered in your own words');
+  assert.equal(await asking.isHidden('#note'), true, 'the question is not repeated above');
+  if (shots) await asking.screenshot({ path: shots + '/deck-question.png' });
+  await asking.click('#choices button:nth-of-type(2)');
+  assert.deepEqual(await sends(asking), [{ id: 'q1', text: 'Another design', submit: true }]);
+  assert.equal(await asking.evaluate(() => window.lastSend.question), question.prompt);
+  assert.equal(await asking.evaluate(() => [...document.querySelectorAll('#choices button')].every((b) => b.disabled)), true, 'no second answer while one is in flight');
+  await asking.evaluate(() => deck.sent('q1', false, 'Not sent: that question is no longer open; nothing was sent', window.lastSend.req));
+  await asking.evaluate(() => deck.press('1', { ctrl: true }));
+  assert.deepEqual(await sends(asking), [{ id: 'q1', text: 'Ship it', submit: true }], '⌃1 picks the first option');
+  await asking.evaluate(() => deck.sent('q1', false, 'Not sent', window.lastSend.req));
+  await asking.keyboard.press('Tab');
+  await asking.keyboard.type('Neither, make it darker');
+  await asking.keyboard.press('Meta+Enter');
+  assert.deepEqual(await sends(asking), [{ id: 'q1', text: 'Neither, make it darker', submit: true }]);
+  assert.equal(await asking.evaluate(() => window.lastSend.question), question.prompt);
+  assert.deepEqual(asking.errors, []);
+
   await browser.close();
   console.log('ok', browser.browserType().name());
 })().catch((e) => { console.error(e); process.exit(1); });

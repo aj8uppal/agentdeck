@@ -626,7 +626,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, WKScriptMess
         case "send":  // every send gets an answer, tagged with the request it answers
             let req = m["req"] as? Int ?? 0
             if let row = row(id), let text = m["text"] as? String {
-                send(text, to: row, submit: m["submit"] as? Bool ?? true, req: req, sid: m["sid"] as? String ?? "")
+                send(text, to: row, submit: m["submit"] as? Bool ?? true, req: req, sid: m["sid"] as? String ?? "", question: m["question"] as? String)
             } else { js("deck.sent(\(literal(id ?? "")), false, 'Not sent: that agent is no longer running', \(req))") }
         case "keep":  // drafts and queued replies, so quitting the app cannot lose words you wrote
             if let drafts = m["drafts"] as? [String: String] { UserDefaults.standard.set(drafts, forKey: "drafts") }
@@ -688,10 +688,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, WKScriptMess
 
     /// `ag send` re-reads the agent's state at this moment and refuses unless it is waiting for a prompt, so a reply
     /// can't land in a dialog, a busy turn, or a shell left behind by an agent that exited.
-    func send(_ text: String, to row: [String: Any], submit: Bool, req: Int, sid: String) {
+    /// `question`: the ask_user question the page showed when the reply was written ("" for none), so a reply never
+    /// answers a different question than the one on screen.
+    func send(_ text: String, to row: [String: Any], submit: Bool, req: Int, sid: String, question: String?) {
         guard let id = row["id"] as? String else { return }
         cli.async {
-            let args = ["send", id] + (sid.isEmpty ? [] : ["--sid", sid]) + (submit ? [] : ["--no-submit"])
+            let args = ["send", id] + (sid.isEmpty ? [] : ["--sid", sid]) + (question.map { ["--question", $0] } ?? []) + (submit ? [] : ["--no-submit"])
             let result = run(self.ag, args, stdin: text, timeout: 12)
             log("send \(id) submit=\(submit): \(result.ok) \(result.err)")
             DispatchQueue.main.async {
@@ -879,7 +881,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, WKScriptMess
             let blockers = news.filter { $0["state"] as? String == "blocked" }, finished = news.filter { $0["state"] as? String != "blocked" }
             if let row = blockers.last {  // one banner at a time: the blocker wins, and says if others are waiting too
                 let others = blockers.count + finished.count - 1
-                return self.banner(row, title: "Blocked: " + (row["title"] as? String ?? "agent"),
+                return self.banner(row, title: (row["question"] is [String: Any] ? "Question: " : "Blocked: ") + (row["title"] as? String ?? "agent"),
                                    body: others > 0 ? "\(row["note"] as? String ?? "") · and \(others) more waiting" : nil, sound: true)
             }
             if finished.count == 1 {
