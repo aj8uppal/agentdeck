@@ -12,7 +12,7 @@
   ag send ID    paste stdin into that agent's terminal and press Return. Refuses unless that agent is waiting for a
                 prompt, still owns its terminal, and its input line is visibly empty.
                 A pi agent takes it through its extension instead: no terminal involved, queued while it works.
-                A pi blocked on an ask_user question takes it as the answer (an option's label, or your own words).
+                A pi waiting on an ask_user question takes it as your reply (an option's label, or your own words).
                 (ID as in `ag stream`, e.g. claude-1234 or pi-5678; --no-submit pastes without Return; --sid S also
                 requires that agent to still be session S; --question Q requires its open question to still be Q,
                 "" for none, instead of whichever is open when the text arrives)
@@ -23,7 +23,7 @@
                 others the name is kept here. No NAME goes back to the agent's own title.
   ag check      self-test
 
-BLOCKED = stopped mid-task on a dialog or question. your turn = finished, waiting for your next prompt.
+BLOCKED = stopped on a dialog, or asking you a question. your turn = finished, waiting for your next prompt.
 Pi agents are listed once pi has loaded pi/agentdeck.ts (install.sh links it; /reload a pi that predates it).
 """
 # Absolute interpreter on purpose: WezTerm's GUI has no Homebrew on PATH, and /usr/bin/python3 is the
@@ -633,8 +633,8 @@ def send(who, text, submit, sid='', question=None):
 
 def send_pi(row, text, submit, sid, question):
     """Hand `text` to pi through pi/agentdeck.ts: no terminal, no screen to read, and a draft in its editor stays put.
-    While it works the reply is queued as a follow-up. An ask_user question takes it as the answer; any other dialog it
-    is waiting on must be answered in the tab."""
+    While it works the reply is queued as a follow-up. A reply to an open ask_user question is an ordinary message; any
+    dialog it is waiting on must be answered in the tab."""
     showing = (row.get('question') or {}).get('prompt', '')
     if row['state'] == 'blocked' and not showing:
         sys.exit('it is waiting on a dialog; drop in and answer it there')
@@ -796,7 +796,7 @@ def pi_talk(path, limit):
             t, calls = turns[-1], [b for b in m.get('content') or [] if b.get('type') == 'toolCall']
             t['steps'] += len(calls)
             t['ran'] += [pi_call(b).split(': ', 1)[1] for b in calls if b.get('name') == 'bash']
-            t['open'] = m.get('stopReason') == 'toolUse'
+            t['open'] = m.get('stopReason') == 'toolUse' and not any(b.get('name') == 'ask_user' for b in calls)  # ask_user ends the turn
             t['stopped'] = pi_interrupted(m) or t.get('stopped', False)
             if pi_text(m.get('content')).strip():
                 t['said'] = pi_text(m.get('content')).strip()[:8000]

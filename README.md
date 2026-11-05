@@ -12,7 +12,7 @@ Needs an Apple Silicon Mac, WezTerm, Homebrew Python (`brew install python`) and
     ~/personal/agentdeck/install.sh
 
 That links `ag` into `~/.local/bin`, links the pi extensions into `~/.pi/agent/extensions`, builds `Agentdeck.app` and starts it.
-`pi/agentdeck.ts` puts pi in the deck (state, cost, replies) and gives pi an `ask_user` tool: a question shows as blocked, with its options as buttons in the deck, and a reply there answers it; `pi/autoname.ts` names each pi session and its tab from what it is about (`/autoname` to redo it; a `/name` of yours is kept).
+`pi/agentdeck.ts` puts pi in the deck (state, cost, replies) and changes how pi puts decisions to you. It explains a decision in its reply, then asks it with `ask_user` and ends its turn. You answer in the editor (a bare number picks that option) or with the deck's buttons, or ask why or push back first. A brief above the editor shows the goal, what you decided, what it assumes and what is still open (`/brief` for all of it). `pi/autoname.ts` names each pi session and its tab from what it is about (`/autoname` to redo it; a `/name` of yours is kept).
 Pi sessions already open show up after `/reload` or a restart. Run it again after a `git pull` to update.
 
 - Option+Space opens the deck, Option+Shift+Space jumps to whoever needs you.
