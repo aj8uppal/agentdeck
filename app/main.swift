@@ -148,7 +148,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, WKScriptMess
     var shape: Shape { !pinned || expanded ? .deck : folded ? .pill : .strip }
     var commands: [String: String] {  // what "New agent" runs; yours to change in the form
         ["claude": UserDefaults.standard.string(forKey: "command-claude") ?? "claude --dangerously-skip-permissions",
-         "codex": UserDefaults.standard.string(forKey: "command-codex") ?? "personalcodex --yolo",
+         "codex": UserDefaults.standard.string(forKey: "command-codex") ?? "codex --yolo",
          "pi": UserDefaults.standard.string(forKey: "command-pi") ?? "pi"]
     }
     /// Hand-backs you have dealt with: agent id -> the moment it stopped. A new stop makes it fresh again.
