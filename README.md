@@ -8,7 +8,7 @@ and a way to reply or jump to one without hunting for its tab. The full guide is
 Needs an Apple Silicon Mac, WezTerm, Homebrew Python (`brew install python`) and the Xcode command line tools
 (`xcode-select --install`).
 
-    gh repo clone aj8uppal/agentdeck ~/personal/agentdeck    # private repo: run `gh auth login` first
+    git clone https://github.com/aj8uppal/agentdeck.git ~/personal/agentdeck
     ~/personal/agentdeck/install.sh
 
 That links `ag` into `~/.local/bin`, links the pi extensions into `~/.pi/agent/extensions`, builds `Agentdeck.app` and starts it.
